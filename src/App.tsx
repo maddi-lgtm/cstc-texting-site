@@ -857,7 +857,7 @@ export default function App() {
 
   async function createTag() {
     if (!newTagName.trim()) {
-      showNotice("Segment name is required.");
+      showNotice("Audience group name is required.");
       return;
     }
 
@@ -866,16 +866,16 @@ export default function App() {
     });
 
     if (error) {
-      showNotice(`Segment create failed: ${error.message}`);
+      showNotice(`Audience group create failed: ${error.message}`);
       return;
     }
 
-    await logAudit("created_segment", "contact_tags", undefined, {
+    await logAudit("created_audience_group", "contact_tags", undefined, {
       tag_name: newTagName.trim(),
     });
 
     setNewTagName("");
-    showNotice("Segment created.");
+    showNotice("Audience group created.");
     await loadAll();
   }
 
@@ -1119,14 +1119,14 @@ export default function App() {
             style={navButtonStyle(view === "segments")}
             onClick={() => setView("segments")}
           >
-            Segments
+            Audience Groups
           </button>
 
           <button
             style={navButtonStyle(view === "outbound")}
             onClick={() => setView("outbound")}
           >
-            Outbound
+            Messages Sent
           </button>
 
           <button
@@ -1140,7 +1140,7 @@ export default function App() {
             style={navButtonStyle(view === "audit")}
             onClick={() => setView("audit")}
           >
-            Audit
+            Audit Log
           </button>
         </nav>
 
@@ -1160,9 +1160,9 @@ export default function App() {
               {view === "dashboard" && "Overview"}
               {view === "campaigns" && "Campaigns"}
               {view === "contacts" && "Contacts"}
-              {view === "segments" && "Segments"}
-              {view === "outbound" && "Outbound Log"}
-              {view === "inbound" && "Reply Inbox"}
+              {view === "segments" && "Audience Groups"}
+              {view === "outbound" && "Messages Sent"}
+              {view === "inbound" && "Replies"}
               {view === "audit" && "Audit Log"}
             </h1>
           </div>
@@ -1385,7 +1385,7 @@ export default function App() {
               <div style={styles.sectionHeader}>
                 <h2 className="cstc-section-title">Contact List</h2>
                 <p style={styles.sectionCopy}>
-                  Manage contacts, segments, SMS consent, and compliance fields.
+                  Manage contacts, audience groups, SMS consent, and compliance fields.
                 </p>
               </div>
 
@@ -1523,14 +1523,14 @@ export default function App() {
         {view === "segments" && (
           <section>
             <div style={styles.sectionHeader}>
-              <h2 className="cstc-section-title">Segments</h2>
+              <h2 className="cstc-section-title">Audience Groups</h2>
               <p style={styles.sectionCopy}>
-                Manage reusable audience groups.
+                Manage reusable lists of people, such as donors, staff, teachers, VIPs, press, and opening night guests.
               </p>
             </div>
 
             <div className="cstc-card" style={styles.editorPanel}>
-              <label style={styles.fieldLabel}>New Segment</label>
+              <label style={styles.fieldLabel}>New Audience Group</label>
               <div style={styles.inlineForm}>
                 <input
                   className="cstc-input"
@@ -1547,7 +1547,7 @@ export default function App() {
             <div style={styles.segmentGrid}>
               {tags.map((tag) => (
                 <div key={tag.id} className="cstc-card" style={styles.statCard}>
-                  <span className="cstc-overline">Segment</span>
+                  <span className="cstc-overline">Audience Group</span>
                   <h3 style={styles.recordTitle}>{tag.tag_name}</h3>
                   <p style={styles.statCopy}>
                     {
@@ -1564,7 +1564,7 @@ export default function App() {
 
         {view === "outbound" && (
           <LogTable
-            title="Outbound Message Log"
+            title="Messages Sent"
             rows={outboundLogs.map((log) => ({
               id: log.id,
               primary: campaignById(log.campaign_id)?.campaign_name || "Campaign",
@@ -1581,7 +1581,7 @@ export default function App() {
 
         {view === "inbound" && (
           <LogTable
-            title="Inbound Reply Inbox"
+            title="Replies"
             rows={inboundReplies.map((reply) => {
               const contact = contactById(reply.contact_id);
               const body = reply.body || "";
@@ -1875,7 +1875,7 @@ function ContactEditor({
         placeholder="manual, csv_import, web_form, box_office..."
       />
 
-      <label style={styles.fieldLabel}>Segments</label>
+      <label style={styles.fieldLabel}>Audience Groups</label>
       <div style={styles.tagCheckboxGrid}>
         {tags.map((tag) => (
           <label key={tag.id} style={styles.checkboxLabelSmall}>
