@@ -688,8 +688,8 @@ export default function App() {
   }
 
   function openSendModal(campaign: Campaign, sendType: "test" | "campaign") {
-    const staffTag = tags.find(
-      (tag) => tag.tag_name.toLowerCase() === "staff"
+    const testTag = tags.find(
+      (tag) => tag.tag_name.toLowerCase() === "test"
     );
 
     setSendModal({ campaign, sendType });
@@ -697,11 +697,12 @@ export default function App() {
 
     if (sendType === "test") {
       setSendAllContacts(false);
-      setSendSelectedTagIds(staffTag ? [staffTag.id] : []);
-    } else {
-      setSendAllContacts(true);
-      setSendSelectedTagIds([]);
+      setSendSelectedTagIds(testTag ? [testTag.id] : []);
+      return;
     }
+
+    setSendAllContacts(false);
+    setSendSelectedTagIds([]);
   }
 
   function closeSendModal() {
@@ -2420,7 +2421,7 @@ function SendCampaignModal({
     <div style={styles.modalBackdrop}>
       <div className="cstc-card" style={styles.sendModalCard}>
         <span className="cstc-overline">
-          {modal.sendType === "test" ? "Staff/Test Send" : "Campaign Send"}
+          {modal.sendType === "test" ? "Test Send" : "Campaign Send"}
         </span>
 
         <h2 className="cstc-section-title">{modal.campaign.campaign_name}</h2>
@@ -2428,6 +2429,8 @@ function SendCampaignModal({
         <p style={styles.modalMessage}>
           Choose who should receive this message. Only SMS opted-in contacts with
           valid phone numbers are counted.
+          {modal.sendType === "test" &&
+            " Send Test uses the TEST Audience Group by default."}
         </p>
 
         <div style={styles.sendAudienceBox}>
@@ -2451,9 +2454,22 @@ function SendCampaignModal({
             </label>
           )}
 
-          <div style={styles.sendGroupHeader}>Audience Groups</div>
+          <div
+            style={{
+              ...styles.sendGroupHeader,
+              opacity: sendAllContacts ? 0.45 : 1,
+            }}
+          >
+            Audience Groups
+          </div>
 
-          <div style={styles.sendGroupGrid}>
+          <div
+            style={{
+              ...styles.sendGroupGrid,
+              opacity: sendAllContacts ? 0.45 : 1,
+              pointerEvents: sendAllContacts ? "none" : "auto",
+            }}
+          >
             {tags.map((tag) => (
               <label key={tag.id} style={styles.checkboxLabelSmall}>
                 <input
