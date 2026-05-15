@@ -8,7 +8,15 @@ import type {
 import { supabase } from "./lib/supabase";
 import "./styles/brand.css";
 
-type View = "dashboard" | "campaigns" | "contacts";
+type View =
+  | "dashboard"
+  | "campaigns"
+  | "contacts"
+  | "segments"
+  | "outbound"
+  | "inbound"
+  | "audit";
+
 type CampaignFilter = "all" | "draft" | "ready" | "sent" | "archived";
 type CampaignStatus = "draft" | "ready" | "sent" | "archived";
 type Audience = "staff" | "all";
@@ -42,6 +50,53 @@ type Contact = {
   sms_opt_in_source?: string | null;
   sms_opt_in_date?: string | null;
   sms_opt_out_date?: string | null;
+  last_sms_sent_at?: string | null;
+};
+
+type ContactTag = {
+  id: string;
+  tag_name: string;
+  created_at?: string;
+};
+
+type ContactTagMember = {
+  id: string;
+  contact_id: string;
+  tag_id: string;
+};
+
+type OutboundLog = {
+  id: string;
+  campaign_id: string | null;
+  contact_id: string | null;
+  to_phone: string | null;
+  body_sent: string | null;
+  media_url_sent: string | null;
+  twilio_message_sid: string | null;
+  twilio_status: string | null;
+  twilio_error_code: string | null;
+  twilio_error_message: string | null;
+  created_at?: string;
+};
+
+type InboundReply = {
+  id: string;
+  from_phone: string | null;
+  to_phone: string | null;
+  body: string | null;
+  contact_id: string | null;
+  twilio_message_sid: string | null;
+  created_at?: string;
+};
+
+type AuditLog = {
+  id: string;
+  actor: string | null;
+  action: string;
+  entity_type: string | null;
+  entity_id: string | null;
+  details: Record<string, unknown> | null;
+  created_at?: string;
 };
 
 type CampaignDraft = {
@@ -60,6 +115,21 @@ type ContactDraft = {
   sms_opt_out: boolean;
   is_staff: boolean;
   contact_type: ContactType;
+  sms_opt_in_source: string;
+};
+
+type ImportRow = {
+  first_name: string | null;
+  last_name: string | null;
+  email: string | null;
+  phone_raw: string | null;
+  phone_e164: string | null;
+  sms_opt_in: boolean;
+  sms_opt_out: boolean;
+  is_staff: boolean;
+  contact_type: ContactType;
+  duplicate_reason?: string;
+  valid: boolean;
 };
 
 const emptyCampaign: CampaignDraft = {
@@ -78,6 +148,7 @@ const emptyContact: ContactDraft = {
   sms_opt_out: false,
   is_staff: false,
   contact_type: "other",
+  sms_opt_in_source: "manual",
 };
 
 const campaignFilters: CampaignFilter[] = [
@@ -102,6 +173,11 @@ export default function App() {
 
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
+  const [tags, setTags] = useState<ContactTag[]>([]);
+  const [tagMembers, setTagMembers] = useState<ContactTagMember[]>([]);
+  const [outboundLogs, setOutboundLogs] = useState<OutboundLog[]>([]);
+  const [inboundReplies, setInboundReplies] = useState<InboundReply[]>([]);
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
 
   const [campaignMode, setCampaignMode] = useState<"none" | "create" | "edit">(
     "none"
@@ -117,11 +193,15 @@ export default function App() {
   );
   const [editingContactId, setEditingContactId] = useState<string | null>(null);
   const [contactForm, setContactForm] = useState<ContactDraft>(emptyContact);
+  const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
 
   const [contactSearch, setContactSearch] = useState("");
   const [contactTypeFilter, setContactTypeFilter] =
     useState<ContactTypeFilter>("all");
   const [contactSort, setContactSort] = useState<ContactSort>("last_name");
+
+  const [newTagName, setNewTagName] = useState("");
+  const [importPreview, setImportPreview] = useState<ImportRow[] | null>(null);
 
   const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -131,9 +211,7 @@ export default function App() {
   }, []);
 
   const filteredCampaigns = useMemo(() => {
-    if (campaignFilter === "all") {
-      return campaigns;
-    }
+    if (campaignFilter === "all") return campaigns;
 
     return campaigns.filter((campaign) => {
       const status = (campaign.campaign_status || "draft") as CampaignStatus;
@@ -145,6 +223,10 @@ export default function App() {
     const search = contactSearch.trim().toLowerCase();
 
     const results = contacts.filter((contact) => {
+      const contactTags = tagsForContact(contact.id)
+        .map((tag) => tag.tag_name)
+        .join(" ");
+
       const matchesSearch = !search
         ? true
         : [
@@ -154,6 +236,7 @@ export default function App() {
             contact.phone_raw,
             contact.phone_e164,
             contact.contact_type,
+            contactTags,
           ]
             .join(" ")
             .toLowerCase()
@@ -198,10 +281,25 @@ export default function App() {
 
       return 0;
     });
-  }, [contacts, contactSearch, contactTypeFilter, contactSort]);
+  }, [
+    contacts,
+    contactSearch,
+    contactTypeFilter,
+    contactSort,
+    tagMembers,
+    tags,
+  ]);
 
   async function loadAll() {
-    const [campaignResult, contactResult] = await Promise.all([
+    const [
+      campaignResult,
+      contactResult,
+      tagResult,
+      memberResult,
+      outboundResult,
+      inboundResult,
+      auditResult,
+    ] = await Promise.all([
       supabase
         .from("sms_campaigns")
         .select("*")
@@ -209,23 +307,61 @@ export default function App() {
       supabase.from("contacts").select("*").order("last_name", {
         ascending: true,
       }),
+      supabase.from("contact_tags").select("*").order("tag_name"),
+      supabase.from("contact_tag_members").select("*"),
+      supabase
+        .from("sms_outbound")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(250),
+      supabase
+        .from("sms_inbound")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(250),
+      supabase
+        .from("audit_log")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(250),
     ]);
 
-    if (campaignResult.data) {
-      setCampaigns(campaignResult.data as Campaign[]);
-    }
+    if (campaignResult.data) setCampaigns(campaignResult.data as Campaign[]);
+    if (contactResult.data) setContacts(contactResult.data as Contact[]);
+    if (tagResult.data) setTags(tagResult.data as ContactTag[]);
+    if (memberResult.data)
+      setTagMembers(memberResult.data as ContactTagMember[]);
+    if (outboundResult.data)
+      setOutboundLogs(outboundResult.data as OutboundLog[]);
+    if (inboundResult.data)
+      setInboundReplies(inboundResult.data as InboundReply[]);
+    if (auditResult.data) setAuditLogs(auditResult.data as AuditLog[]);
 
-    if (contactResult.data) {
-      setContacts(contactResult.data as Contact[]);
-    }
+    const firstError =
+      campaignResult.error ||
+      contactResult.error ||
+      tagResult.error ||
+      memberResult.error ||
+      outboundResult.error ||
+      inboundResult.error ||
+      auditResult.error;
 
-    if (campaignResult.error) {
-      setNotice(`Campaign load error: ${campaignResult.error.message}`);
-    }
+    if (firstError) setNotice(`Load error: ${firstError.message}`);
+  }
 
-    if (contactResult.error) {
-      setNotice(`Contact load error: ${contactResult.error.message}`);
-    }
+  async function logAudit(
+    action: string,
+    entityType?: string,
+    entityId?: string,
+    details?: Record<string, unknown>
+  ) {
+    await supabase.from("audit_log").insert({
+      actor: "dashboard",
+      action,
+      entity_type: entityType ?? null,
+      entity_id: entityId ?? null,
+      details: details ?? {},
+    });
   }
 
   function showNotice(message: string) {
@@ -244,14 +380,45 @@ export default function App() {
 
   function normalizePhone(rawPhone: string) {
     const digits = rawPhone.replace(/\D/g, "");
-
     if (digits.length === 10) return `+1${digits}`;
     if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
     if (rawPhone.trim().startsWith("+") && digits.length >= 11) {
       return `+${digits}`;
     }
-
     return rawPhone;
+  }
+
+  function fullName(contact: Contact) {
+    const name = `${contact.first_name || ""} ${contact.last_name || ""}`.trim();
+    return name || "No Name";
+  }
+
+  function tagsForContact(contactId: string) {
+    const ids = tagMembers
+      .filter((member) => member.contact_id === contactId)
+      .map((member) => member.tag_id);
+
+    return tags.filter((tag) => ids.includes(tag.id));
+  }
+
+  function contactById(contactId: string | null) {
+    if (!contactId) return null;
+    return contacts.find((contact) => contact.id === contactId) || null;
+  }
+
+  function campaignById(campaignId: string | null) {
+    if (!campaignId) return null;
+    return campaigns.find((campaign) => campaign.id === campaignId) || null;
+  }
+
+  function getAudienceCount(audience: Audience) {
+    return contacts.filter((contact) => {
+      const eligible =
+        contact.sms_opt_in && !contact.sms_opt_out && Boolean(contact.phone_e164);
+      if (!eligible) return false;
+      if (audience === "staff") return Boolean(contact.is_staff);
+      return true;
+    }).length;
   }
 
   function openCampaigns(filter: CampaignFilter = "all") {
@@ -271,7 +438,6 @@ export default function App() {
     }
 
     const original = campaigns.find((c) => c.id === editingCampaignId);
-
     if (!original) return false;
 
     return (
@@ -283,18 +449,17 @@ export default function App() {
     );
   }
 
+  function confirmDiscardCampaignEdits() {
+    if (!isCampaignDirty()) return true;
+    return window.confirm(
+      "You have unsaved campaign changes. Discard them and continue?"
+    );
+  }
+
   function cancelCampaignEditor() {
     setCampaignMode("none");
     setEditingCampaignId(null);
     setCampaignForm(emptyCampaign);
-  }
-
-  function confirmDiscardCampaignEdits() {
-    if (!isCampaignDirty()) return true;
-
-    return window.confirm(
-      "You have unsaved campaign changes. Discard them and continue?"
-    );
   }
 
   function startNewCampaign() {
@@ -345,17 +510,22 @@ export default function App() {
         : null;
 
     if (campaignMode === "create") {
-      const { error } = await supabase.from("sms_campaigns").insert({
-        campaign_name: campaignForm.campaign_name,
-        message_body: campaignForm.message_body,
-        media_url: campaignForm.media_url || null,
-        campaign_status: campaignForm.campaign_status,
-        archived_at: archivedAt,
-      });
+      const { data, error } = await supabase
+        .from("sms_campaigns")
+        .insert({
+          campaign_name: campaignForm.campaign_name,
+          message_body: campaignForm.message_body,
+          media_url: campaignForm.media_url || null,
+          campaign_status: campaignForm.campaign_status,
+          archived_at: archivedAt,
+        })
+        .select()
+        .single();
 
       if (error) {
         showNotice(`Create campaign failed: ${error.message}`);
       } else {
+        await logAudit("created_campaign", "sms_campaigns", data.id, data);
         showNotice("Campaign created.");
         cancelCampaignEditor();
         await loadAll();
@@ -377,6 +547,9 @@ export default function App() {
       if (error) {
         showNotice(`Update campaign failed: ${error.message}`);
       } else {
+        await logAudit("edited_campaign", "sms_campaigns", editingCampaignId, {
+          campaignForm,
+        });
         showNotice("Campaign updated.");
         cancelCampaignEditor();
         await loadAll();
@@ -403,6 +576,11 @@ export default function App() {
       return;
     }
 
+    await logAudit("changed_campaign_status", "sms_campaigns", campaign.id, {
+      from: campaign.campaign_status,
+      to: status,
+    });
+
     if (editingCampaignId === campaign.id) {
       setCampaignForm({
         campaign_name: campaign.campaign_name || "",
@@ -417,12 +595,24 @@ export default function App() {
   }
 
   async function sendCampaign(campaign: Campaign, audience: Audience) {
-    const label =
-      audience === "staff" ? "staff test contacts only" : "all opted-in contacts";
+    const count = getAudienceCount(audience);
 
-    const ok = window.confirm(`Send "${campaign.campaign_name}" to ${label}?`);
+    if (audience === "staff") {
+      const ok = window.confirm(
+        `Send test "${campaign.campaign_name}" to ${count} staff contact(s)?`
+      );
+      if (!ok) return;
+    }
 
-    if (!ok) return;
+    if (audience === "all") {
+      const typed = window.prompt(
+        `Send "${campaign.campaign_name}" to ${count} opted-in contact(s)?\n\nType SEND to confirm.`
+      );
+      if (typed !== "SEND") {
+        showNotice("Send cancelled.");
+        return;
+      }
+    }
 
     setLoading(true);
 
@@ -460,15 +650,13 @@ export default function App() {
     }
 
     const original = contacts.find((c) => c.id === editingContactId);
-
     if (!original) return false;
 
     return (
       contactForm.first_name !== (original.first_name || "") ||
       contactForm.last_name !== (original.last_name || "") ||
       contactForm.email !== (original.email || "") ||
-      contactForm.phone_raw !==
-        (original.phone_raw || original.phone_e164 || "") ||
+      contactForm.phone_raw !== (original.phone_raw || original.phone_e164 || "") ||
       contactForm.sms_opt_in !== original.sms_opt_in ||
       contactForm.sms_opt_out !== original.sms_opt_out ||
       contactForm.is_staff !== Boolean(original.is_staff) ||
@@ -476,18 +664,18 @@ export default function App() {
     );
   }
 
+  function confirmDiscardContactEdits() {
+    if (!isContactDirty()) return true;
+    return window.confirm(
+      "You have unsaved contact changes. Discard them and continue?"
+    );
+  }
+
   function cancelContactEditor() {
     setContactMode("none");
     setEditingContactId(null);
     setContactForm(emptyContact);
-  }
-
-  function confirmDiscardContactEdits() {
-    if (!isContactDirty()) return true;
-
-    return window.confirm(
-      "You have unsaved contact changes. Discard them and continue?"
-    );
+    setSelectedTagIds([]);
   }
 
   function startNewContact() {
@@ -496,6 +684,7 @@ export default function App() {
     setContactMode("create");
     setEditingContactId(null);
     setContactForm(emptyContact);
+    setSelectedTagIds([]);
   }
 
   function startEditContact(contact: Contact) {
@@ -514,7 +703,38 @@ export default function App() {
       sms_opt_out: Boolean(contact.sms_opt_out),
       is_staff: Boolean(contact.is_staff),
       contact_type: contact.contact_type || "other",
+      sms_opt_in_source: contact.sms_opt_in_source || "manual",
     });
+
+    setSelectedTagIds(
+      tagMembers
+        .filter((member) => member.contact_id === contact.id)
+        .map((member) => member.tag_id)
+    );
+  }
+
+  async function checkDuplicateContact(phone: string, email: string) {
+    const normalizedEmail = email.trim().toLowerCase();
+
+    let query = supabase.from("contacts").select("*");
+
+    if (editingContactId) {
+      query = query.neq("id", editingContactId);
+    }
+
+    const { data } = await query;
+
+    const duplicate = (data || []).find((contact) => {
+      const phoneMatches = phone && contact.phone_e164 === phone;
+      const emailMatches =
+        normalizedEmail &&
+        contact.email &&
+        String(contact.email).toLowerCase() === normalizedEmail;
+
+      return phoneMatches || emailMatches;
+    });
+
+    return duplicate || null;
   }
 
   async function saveContact() {
@@ -522,6 +742,18 @@ export default function App() {
 
     if (!formattedPhone.trim()) {
       showNotice("A phone number is required.");
+      return;
+    }
+
+    const duplicate = await checkDuplicateContact(
+      formattedPhone,
+      contactForm.email
+    );
+
+    if (duplicate) {
+      showNotice(
+        `Duplicate detected: ${fullName(duplicate as Contact)} already has that phone or email.`
+      );
       return;
     }
 
@@ -537,6 +769,7 @@ export default function App() {
       sms_opt_out: contactForm.sms_opt_out,
       is_staff: contactForm.is_staff,
       contact_type: contactForm.contact_type,
+      sms_opt_in_source: contactForm.sms_opt_in_source || "manual",
       sms_opt_in_date: contactForm.sms_opt_in ? new Date().toISOString() : null,
       sms_opt_out_date: contactForm.sms_opt_out
         ? new Date().toISOString()
@@ -544,11 +777,17 @@ export default function App() {
     };
 
     if (contactMode === "create") {
-      const { error } = await supabase.from("contacts").insert(payload);
+      const { data, error } = await supabase
+        .from("contacts")
+        .insert(payload)
+        .select()
+        .single();
 
       if (error) {
         showNotice(`Create contact failed: ${error.message}`);
       } else {
+        await saveContactTags(data.id);
+        await logAudit("created_contact", "contacts", data.id, payload);
         showNotice("Contact created.");
         cancelContactEditor();
         await loadAll();
@@ -564,6 +803,8 @@ export default function App() {
       if (error) {
         showNotice(`Update contact failed: ${error.message}`);
       } else {
+        await saveContactTags(editingContactId);
+        await logAudit("edited_contact", "contacts", editingContactId, payload);
         showNotice("Contact updated.");
         cancelContactEditor();
         await loadAll();
@@ -571,6 +812,19 @@ export default function App() {
     }
 
     setLoading(false);
+  }
+
+  async function saveContactTags(contactId: string) {
+    await supabase.from("contact_tag_members").delete().eq("contact_id", contactId);
+
+    if (selectedTagIds.length > 0) {
+      await supabase.from("contact_tag_members").insert(
+        selectedTagIds.map((tagId) => ({
+          contact_id: contactId,
+          tag_id: tagId,
+        }))
+      );
+    }
   }
 
   async function toggleContactSmsActive(contact: Contact) {
@@ -594,12 +848,35 @@ export default function App() {
       return;
     }
 
+    await logAudit("changed_contact_sms_status", "contacts", contact.id, {
+      active: nextActive,
+    });
+
     await loadAll();
   }
 
-  function fullName(contact: Contact) {
-    const name = `${contact.first_name || ""} ${contact.last_name || ""}`.trim();
-    return name || "No Name";
+  async function createTag() {
+    if (!newTagName.trim()) {
+      showNotice("Segment name is required.");
+      return;
+    }
+
+    const { error } = await supabase.from("contact_tags").insert({
+      tag_name: newTagName.trim(),
+    });
+
+    if (error) {
+      showNotice(`Segment create failed: ${error.message}`);
+      return;
+    }
+
+    await logAudit("created_segment", "contact_tags", undefined, {
+      tag_name: newTagName.trim(),
+    });
+
+    setNewTagName("");
+    showNotice("Segment created.");
+    await loadAll();
   }
 
   function exportContactsCsv() {
@@ -613,6 +890,10 @@ export default function App() {
       "sms_opt_out",
       "is_staff",
       "contact_type",
+      "sms_opt_in_source",
+      "sms_opt_in_date",
+      "sms_opt_out_date",
+      "last_sms_sent_at",
     ];
 
     const rows = contacts.map((contact) =>
@@ -665,7 +946,7 @@ export default function App() {
     return values;
   }
 
-  async function importContactsCsv(file: File) {
+  async function previewContactsCsv(file: File) {
     const text = await file.text();
     const lines = text.split(/\r?\n/).filter((line) => line.trim());
 
@@ -676,7 +957,7 @@ export default function App() {
 
     const headers = parseCsvLine(lines[0]).map((header) => header.trim());
 
-    const rows = lines.slice(1).map((line) => {
+    const rows: ImportRow[] = lines.slice(1).map((line) => {
       const values = parseCsvLine(line);
       const record: Record<string, string> = {};
 
@@ -696,6 +977,18 @@ export default function App() {
           ? incomingType
           : "other";
 
+      const duplicate = contacts.find((contact) => {
+        const phoneMatch = phoneE164 && contact.phone_e164 === phoneE164;
+        const emailMatch =
+          record.email &&
+          contact.email &&
+          contact.email.toLowerCase() === record.email.toLowerCase();
+
+        return phoneMatch || emailMatch;
+      });
+
+      const valid = Boolean(phoneE164);
+
       return {
         first_name: record.first_name || null,
         last_name: record.last_name || null,
@@ -706,17 +999,71 @@ export default function App() {
         sms_opt_out: smsOptOut,
         is_staff: record.is_staff?.toLowerCase() === "true",
         contact_type: contactType,
+        duplicate_reason: duplicate ? `Matches ${fullName(duplicate)}` : undefined,
+        valid,
       };
     });
 
-    const { error } = await supabase.from("contacts").insert(rows);
+    setImportPreview(rows);
+    showNotice(`Preview ready: ${rows.length} rows.`);
+  }
 
-    if (error) {
-      showNotice(`CSV import failed: ${error.message}`);
-      return;
+  async function commitImportPreview() {
+    if (!importPreview) return;
+
+    const validRows = importPreview.filter((row) => row.valid);
+
+    setLoading(true);
+
+    let created = 0;
+    let updated = 0;
+
+    for (const row of validRows) {
+      const existing = contacts.find((contact) => {
+        const phoneMatch = row.phone_e164 && contact.phone_e164 === row.phone_e164;
+        const emailMatch =
+          row.email &&
+          contact.email &&
+          contact.email.toLowerCase() === row.email.toLowerCase();
+
+        return phoneMatch || emailMatch;
+      });
+
+      const payload = {
+        first_name: row.first_name,
+        last_name: row.last_name,
+        email: row.email,
+        phone_raw: row.phone_raw,
+        phone_e164: row.phone_e164,
+        sms_opt_in: row.sms_opt_in,
+        sms_opt_out: row.sms_opt_out,
+        is_staff: row.is_staff,
+        contact_type: row.contact_type,
+        sms_opt_in_source: "csv_import",
+        sms_opt_in_date: row.sms_opt_in ? new Date().toISOString() : null,
+        sms_opt_out_date: row.sms_opt_out ? new Date().toISOString() : null,
+      };
+
+      if (existing) {
+        await supabase.from("contacts").update(payload).eq("id", existing.id);
+        updated += 1;
+      } else {
+        await supabase.from("contacts").insert(payload);
+        created += 1;
+      }
     }
 
-    showNotice(`Imported ${rows.length} contacts.`);
+    await logAudit("imported_contacts", "contacts", undefined, {
+      rows: importPreview.length,
+      valid: validRows.length,
+      created,
+      updated,
+      invalid: importPreview.length - validRows.length,
+    });
+
+    setImportPreview(null);
+    setLoading(false);
+    showNotice(`Import complete. Created ${created}, updated ${updated}.`);
     await loadAll();
   }
 
@@ -724,7 +1071,7 @@ export default function App() {
     const file = event.target.files?.[0];
 
     if (file) {
-      importContactsCsv(file);
+      previewContactsCsv(file);
     }
 
     event.target.value = "";
@@ -767,6 +1114,34 @@ export default function App() {
           >
             Contacts
           </button>
+
+          <button
+            style={navButtonStyle(view === "segments")}
+            onClick={() => setView("segments")}
+          >
+            Segments
+          </button>
+
+          <button
+            style={navButtonStyle(view === "outbound")}
+            onClick={() => setView("outbound")}
+          >
+            Outbound
+          </button>
+
+          <button
+            style={navButtonStyle(view === "inbound")}
+            onClick={() => setView("inbound")}
+          >
+            Replies
+          </button>
+
+          <button
+            style={navButtonStyle(view === "audit")}
+            onClick={() => setView("audit")}
+          >
+            Audit
+          </button>
         </nav>
 
         <div style={styles.sidebarFooter}>
@@ -785,6 +1160,10 @@ export default function App() {
               {view === "dashboard" && "Overview"}
               {view === "campaigns" && "Campaigns"}
               {view === "contacts" && "Contacts"}
+              {view === "segments" && "Segments"}
+              {view === "outbound" && "Outbound Log"}
+              {view === "inbound" && "Reply Inbox"}
+              {view === "audit" && "Audit Log"}
             </h1>
           </div>
 
@@ -867,18 +1246,11 @@ export default function App() {
             <button
               className="cstc-card"
               style={{ ...styles.statCard, ...styles.tileButton }}
-              onClick={() => openCampaigns("archived")}
+              onClick={() => setView("inbound")}
             >
-              <span className="cstc-overline">Campaign Archives</span>
-              <div style={styles.statNumber}>
-                {
-                  campaigns.filter(
-                    (campaign) =>
-                      (campaign.campaign_status || "draft") === "archived"
-                  ).length
-                }
-              </div>
-              <p style={styles.statCopy}>View archived campaigns</p>
+              <span className="cstc-overline">Replies</span>
+              <div style={styles.statNumber}>{inboundReplies.length}</div>
+              <p style={styles.statCopy}>View inbound messages</p>
             </button>
           </section>
         )}
@@ -1013,8 +1385,7 @@ export default function App() {
               <div style={styles.sectionHeader}>
                 <h2 className="cstc-section-title">Contact List</h2>
                 <p style={styles.sectionCopy}>
-                  Manage names, phone numbers, emails, staff test contacts, and
-                  SMS consent.
+                  Manage contacts, segments, SMS consent, and compliance fields.
                 </p>
               </div>
 
@@ -1059,6 +1430,14 @@ export default function App() {
                 </select>
               </div>
 
+              {importPreview && (
+                <ImportPreview
+                  rows={importPreview}
+                  onCancel={() => setImportPreview(null)}
+                  onCommit={commitImportPreview}
+                />
+              )}
+
               <div className="cstc-card" style={styles.compactContactList}>
                 {filteredContacts.length === 0 && (
                   <div style={styles.emptyState}>No contacts found.</div>
@@ -1102,6 +1481,12 @@ export default function App() {
                         {contact.contact_type || "other"}
                       </span>
 
+                      {tagsForContact(contact.id).slice(0, 2).map((tag) => (
+                        <span key={tag.id} style={styles.smallTag}>
+                          {tag.tag_name}
+                        </span>
+                      ))}
+
                       {contact.is_staff && (
                         <span style={styles.smallTag}>Staff</span>
                       )}
@@ -1127,9 +1512,107 @@ export default function App() {
                 onCancel={cancelContactEditor}
                 onSave={saveContact}
                 formattedPhonePreview={normalizePhone(contactForm.phone_raw)}
+                tags={tags}
+                selectedTagIds={selectedTagIds}
+                setSelectedTagIds={setSelectedTagIds}
               />
             </div>
           </section>
+        )}
+
+        {view === "segments" && (
+          <section>
+            <div style={styles.sectionHeader}>
+              <h2 className="cstc-section-title">Segments</h2>
+              <p style={styles.sectionCopy}>
+                Manage reusable audience groups.
+              </p>
+            </div>
+
+            <div className="cstc-card" style={styles.editorPanel}>
+              <label style={styles.fieldLabel}>New Segment</label>
+              <div style={styles.inlineForm}>
+                <input
+                  className="cstc-input"
+                  value={newTagName}
+                  onChange={(event) => setNewTagName(event.target.value)}
+                  placeholder="Example: Opening night guests"
+                />
+                <button className="cstc-btn-primary" onClick={createTag}>
+                  Add
+                </button>
+              </div>
+            </div>
+
+            <div style={styles.segmentGrid}>
+              {tags.map((tag) => (
+                <div key={tag.id} className="cstc-card" style={styles.statCard}>
+                  <span className="cstc-overline">Segment</span>
+                  <h3 style={styles.recordTitle}>{tag.tag_name}</h3>
+                  <p style={styles.statCopy}>
+                    {
+                      tagMembers.filter((member) => member.tag_id === tag.id)
+                        .length
+                    }{" "}
+                    contact(s)
+                  </p>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {view === "outbound" && (
+          <LogTable
+            title="Outbound Message Log"
+            rows={outboundLogs.map((log) => ({
+              id: log.id,
+              primary: campaignById(log.campaign_id)?.campaign_name || "Campaign",
+              secondary:
+                contactById(log.contact_id)?.first_name ||
+                log.to_phone ||
+                "Recipient",
+              detail: log.twilio_error_message || log.twilio_status || "Unknown",
+              date: log.created_at,
+              meta: log.twilio_message_sid || "",
+            }))}
+          />
+        )}
+
+        {view === "inbound" && (
+          <LogTable
+            title="Inbound Reply Inbox"
+            rows={inboundReplies.map((reply) => {
+              const contact = contactById(reply.contact_id);
+              const body = reply.body || "";
+
+              return {
+                id: reply.id,
+                primary: contact ? fullName(contact) : reply.from_phone || "Unknown",
+                secondary: reply.from_phone || "",
+                detail: body,
+                date: reply.created_at,
+                meta:
+                  body.trim().toLowerCase() === "stop"
+                    ? "Opt-out keyword"
+                    : reply.twilio_message_sid || "",
+              };
+            })}
+          />
+        )}
+
+        {view === "audit" && (
+          <LogTable
+            title="Audit Log"
+            rows={auditLogs.map((log) => ({
+              id: log.id,
+              primary: log.action,
+              secondary: log.actor || "dashboard",
+              detail: `${log.entity_type || ""} ${log.entity_id || ""}`,
+              date: log.created_at,
+              meta: JSON.stringify(log.details || {}),
+            }))}
+          />
         )}
       </main>
     </div>
@@ -1249,6 +1732,9 @@ type ContactEditorProps = {
   onCancel: () => void;
   onSave: () => void;
   formattedPhonePreview: string;
+  tags: ContactTag[];
+  selectedTagIds: string[];
+  setSelectedTagIds: Dispatch<SetStateAction<string[]>>;
 };
 
 function ContactEditor({
@@ -1259,6 +1745,9 @@ function ContactEditor({
   onCancel,
   onSave,
   formattedPhonePreview,
+  tags,
+  selectedTagIds,
+  setSelectedTagIds,
 }: ContactEditorProps) {
   if (mode === "none") {
     return (
@@ -1280,6 +1769,14 @@ function ContactEditor({
       sms_opt_in: active,
       sms_opt_out: !active,
     });
+  }
+
+  function toggleTag(tagId: string) {
+    setSelectedTagIds((current) =>
+      current.includes(tagId)
+        ? current.filter((id) => id !== tagId)
+        : [...current, tagId]
+    );
   }
 
   return (
@@ -1368,6 +1865,31 @@ function ContactEditor({
         <option value="other">Other</option>
       </select>
 
+      <label style={styles.fieldLabel}>Opt-In Source</label>
+      <input
+        className="cstc-input"
+        value={form.sms_opt_in_source}
+        onChange={(event) =>
+          setForm({ ...form, sms_opt_in_source: event.target.value })
+        }
+        placeholder="manual, csv_import, web_form, box_office..."
+      />
+
+      <label style={styles.fieldLabel}>Segments</label>
+      <div style={styles.tagCheckboxGrid}>
+        {tags.map((tag) => (
+          <label key={tag.id} style={styles.checkboxLabelSmall}>
+            <input
+              className="cstc-checkbox"
+              type="checkbox"
+              checked={selectedTagIds.includes(tag.id)}
+              onChange={() => toggleTag(tag.id)}
+            />
+            {tag.tag_name}
+          </label>
+        ))}
+      </div>
+
       <label style={styles.checkboxLabelLarge}>
         <input
           className="cstc-checkbox"
@@ -1399,6 +1921,83 @@ function ContactEditor({
         </button>
       </div>
     </aside>
+  );
+}
+
+function ImportPreview({
+  rows,
+  onCancel,
+  onCommit,
+}: {
+  rows: ImportRow[];
+  onCancel: () => void;
+  onCommit: () => void;
+}) {
+  const valid = rows.filter((row) => row.valid).length;
+  const duplicates = rows.filter((row) => row.duplicate_reason).length;
+  const invalid = rows.length - valid;
+
+  return (
+    <div className="cstc-card" style={styles.importPreview}>
+      <span className="cstc-overline">CSV Import Preview</span>
+      <p style={styles.sectionCopy}>
+        Rows: {rows.length} · Valid: {valid} · Duplicates/updates: {duplicates} ·
+        Invalid: {invalid}
+      </p>
+
+      <div style={styles.editorActions}>
+        <button className="cstc-btn-secondary" onClick={onCancel}>
+          Cancel
+        </button>
+        <button className="cstc-btn-primary" onClick={onCommit}>
+          Commit Import
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function LogTable({
+  title,
+  rows,
+}: {
+  title: string;
+  rows: {
+    id: string;
+    primary: string;
+    secondary: string;
+    detail: string;
+    date?: string;
+    meta: string;
+  }[];
+}) {
+  return (
+    <section>
+      <div style={styles.sectionHeader}>
+        <h2 className="cstc-section-title">{title}</h2>
+        <p style={styles.sectionCopy}>Most recent 250 records.</p>
+      </div>
+
+      <div className="cstc-card" style={styles.logList}>
+        {rows.length === 0 && <div style={styles.emptyState}>No records.</div>}
+
+        {rows.map((row) => (
+          <div key={row.id} style={styles.logRow}>
+            <div>
+              <strong style={styles.compactName}>{row.primary}</strong>
+              <div style={styles.compactMeta}>{row.secondary}</div>
+            </div>
+
+            <div style={styles.logDetail}>{row.detail}</div>
+
+            <div style={styles.logMeta}>
+              <div>{row.date ? new Date(row.date).toLocaleString() : ""}</div>
+              <div>{row.meta}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -1723,6 +2322,8 @@ const styles: Record<string, CSSProperties> = {
   tagGroup: {
     display: "flex",
     gap: 6,
+    flexWrap: "wrap",
+    justifyContent: "flex-end",
   },
 
   smallTag: {
@@ -1748,6 +2349,15 @@ const styles: Record<string, CSSProperties> = {
     textTransform: "uppercase",
   },
 
+  checkboxLabelSmall: {
+    alignItems: "center",
+    color: "var(--cstc-copy)",
+    display: "flex",
+    fontSize: 13,
+    gap: 8,
+    lineHeight: "18px",
+  },
+
   formGrid: {
     display: "grid",
     gap: 14,
@@ -1765,6 +2375,12 @@ const styles: Record<string, CSSProperties> = {
     padding: "10px 12px",
   },
 
+  tagCheckboxGrid: {
+    display: "grid",
+    gap: 8,
+    gridTemplateColumns: "1fr 1fr",
+  },
+
   fileButton: {
     display: "inline-block",
     position: "relative",
@@ -1772,5 +2388,49 @@ const styles: Record<string, CSSProperties> = {
 
   hiddenFileInput: {
     display: "none",
+  },
+
+  inlineForm: {
+    display: "grid",
+    gap: 12,
+    gridTemplateColumns: "1fr auto",
+  },
+
+  segmentGrid: {
+    display: "grid",
+    gap: 18,
+    gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+    marginTop: 24,
+  },
+
+  importPreview: {
+    marginBottom: 18,
+    padding: 18,
+  },
+
+  logList: {
+    overflow: "hidden",
+  },
+
+  logRow: {
+    borderBottom: "1px solid var(--cstc-border)",
+    display: "grid",
+    gap: 16,
+    gridTemplateColumns: "240px 1fr 260px",
+    padding: "12px 16px",
+  },
+
+  logDetail: {
+    color: "var(--cstc-copy)",
+    fontSize: 14,
+    lineHeight: "20px",
+    overflowWrap: "anywhere",
+  },
+
+  logMeta: {
+    color: "var(--cstc-muted)",
+    fontSize: 12,
+    lineHeight: "18px",
+    overflowWrap: "anywhere",
   },
 };
