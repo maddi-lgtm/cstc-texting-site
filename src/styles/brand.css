@@ -167,6 +167,16 @@ h6 {
   resize: vertical;
 }
 
+.cstc-select-compact {
+  background: #fff;
+  border: 1px solid var(--cstc-border);
+  border-radius: 4px;
+  color: var(--cstc-cobalt);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 7px 9px;
+}
+
 .cstc-btn-primary {
   background-color: var(--cstc-gold);
   border: 2px solid var(--cstc-gold);
@@ -202,6 +212,25 @@ h6 {
 }
 
 .cstc-btn-secondary:hover {
+  background-color: var(--cstc-navy);
+  color: #fff;
+}
+
+.cstc-btn-small {
+  background-color: #fff;
+  border: 1px solid var(--cstc-navy);
+  border-radius: 2px;
+  color: var(--cstc-navy);
+  cursor: pointer;
+  font-family: Poppins, Arial, sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 12px;
+  padding: 8px 10px;
+  text-transform: uppercase;
+}
+
+.cstc-btn-small:hover {
   background-color: var(--cstc-navy);
   color: #fff;
 }

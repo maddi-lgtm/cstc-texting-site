@@ -1,4 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import {
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import type {
   ChangeEvent,
   CSSProperties,
@@ -318,6 +322,36 @@ export default function App() {
     setLoading(false);
   }
 
+  async function updateCampaignStatus(
+    campaign: Campaign,
+    status: CampaignFilter
+  ) {
+    const { error } = await supabase
+      .from("sms_campaigns")
+      .update({
+        campaign_status: status,
+        archived_at: status === "archived" ? new Date().toISOString() : null,
+      })
+      .eq("id", campaign.id);
+
+    if (error) {
+      showNotice(`Status update failed: ${error.message}`);
+      return;
+    }
+
+    if (editingCampaignId === campaign.id) {
+      setCampaignForm({
+        campaign_name: campaign.campaign_name || "",
+        message_body: campaign.message_body || "",
+        media_url: campaign.media_url || "",
+        campaign_status: status,
+      });
+    }
+
+    showNotice(`Campaign moved to ${status}.`);
+    await loadAll();
+  }
+
   async function sendCampaign(campaign: Campaign, audience: Audience) {
     const label =
       audience === "staff" ? "staff test contacts only" : "all opted-in contacts";
@@ -519,7 +553,9 @@ export default function App() {
 
     const rows = contacts.map((contact) =>
       headers.map((key) => {
-        const value = String((contact as unknown as Record<string, unknown>)[key] ?? "");
+        const value = String(
+          (contact as unknown as Record<string, unknown>)[key] ?? ""
+        );
         return `"${value.replace(/"/g, '""')}"`;
       })
     );
@@ -817,15 +853,28 @@ export default function App() {
                         : "var(--cstc-border)",
                   }}
                 >
-                  <div style={styles.listCardTop}>
+                  <div style={styles.campaignCardHeader}>
                     <div>
                       <h3 style={styles.recordTitle}>
                         {campaign.campaign_name}
                       </h3>
-                      <span className="cstc-pill-light">
-                        {campaign.campaign_status || "draft"}
-                      </span>
                     </div>
+
+                    <select
+                      className="cstc-select-compact"
+                      value={(campaign.campaign_status || "draft") as CampaignFilter}
+                      onChange={(event) =>
+                        updateCampaignStatus(
+                          campaign,
+                          event.target.value as CampaignFilter
+                        )
+                      }
+                    >
+                      <option value="draft">Draft</option>
+                      <option value="ready">Ready</option>
+                      <option value="sent">Sent</option>
+                      <option value="archived">Archived</option>
+                    </select>
                   </div>
 
                   <p style={styles.previewText}>
@@ -838,14 +887,14 @@ export default function App() {
 
                   <div style={styles.buttonRow}>
                     <button
-                      className="cstc-btn-secondary"
+                      className="cstc-btn-small"
                       onClick={() => startEditCampaign(campaign)}
                     >
                       Edit
                     </button>
 
                     <button
-                      className="cstc-btn-secondary"
+                      className="cstc-btn-small"
                       onClick={() => sendCampaign(campaign, "staff")}
                     >
                       Send Test
@@ -901,60 +950,48 @@ export default function App() {
                 style={styles.searchInput}
               />
 
-              {filteredContacts.length === 0 && (
-                <div className="cstc-card" style={styles.emptyState}>
-                  No contacts found.
-                </div>
-              )}
+              <div className="cstc-card" style={styles.compactContactList}>
+                {filteredContacts.length === 0 && (
+                  <div style={styles.emptyState}>No contacts found.</div>
+                )}
 
-              {filteredContacts.map((contact) => (
-                <article
-                  key={contact.id}
-                  className="cstc-card"
-                  style={{
-                    ...styles.listCard,
-                    borderColor:
-                      editingContactId === contact.id
-                        ? "var(--cstc-gold)"
-                        : "var(--cstc-border)",
-                  }}
-                >
-                  <div style={styles.contactRow}>
-                    <div>
-                      <label style={styles.contactNameCheckbox}>
-                        <input
-                          className="cstc-checkbox"
-                          type="checkbox"
-                          checked={contact.sms_opt_in && !contact.sms_opt_out}
-                          onChange={() => toggleContactSmsActive(contact)}
-                        />
+                {filteredContacts.map((contact) => (
+                  <div
+                    key={contact.id}
+                    style={{
+                      ...styles.compactContactRow,
+                      background:
+                        editingContactId === contact.id
+                          ? "var(--cstc-light-bg)"
+                          : "#fff",
+                    }}
+                  >
+                    <label style={styles.compactCheckboxWrap}>
+                      <input
+                        className="cstc-checkbox"
+                        type="checkbox"
+                        checked={contact.sms_opt_in && !contact.sms_opt_out}
+                        onChange={() => toggleContactSmsActive(contact)}
+                      />
+                    </label>
 
-                        <span style={styles.recordTitle}>{fullName(contact)}</span>
-                      </label>
-
-                      <p style={styles.contactDetails}>
-                        {contact.phone_e164 || contact.phone_raw || "No phone"}
-                      </p>
-                      <p style={styles.contactDetails}>
-                        {contact.email || "No email"}
-                      </p>
-
-                      {contact.is_staff && (
-                        <span className="cstc-pill-light">Staff Test</span>
-                      )}
-                    </div>
-                  </div>
-
-                  <div style={styles.buttonRow}>
                     <button
-                      className="cstc-btn-secondary"
+                      style={styles.compactContactButton}
                       onClick={() => startEditContact(contact)}
                     >
-                      Edit
+                      <span style={styles.compactName}>{fullName(contact)}</span>
+                      <span style={styles.compactMeta}>
+                        {contact.phone_e164 || contact.phone_raw || "No phone"}
+                        {contact.email ? ` · ${contact.email}` : ""}
+                      </span>
                     </button>
+
+                    {contact.is_staff && (
+                      <span style={styles.staffTag}>Staff</span>
+                    )}
                   </div>
-                </article>
-              ))}
+                ))}
+              </div>
             </div>
 
             <div>
@@ -1433,11 +1470,11 @@ const styles: Record<string, CSSProperties> = {
     padding: 18,
   },
 
-  listCardTop: {
+  campaignCardHeader: {
     alignItems: "flex-start",
     display: "flex",
-    justifyContent: "space-between",
     gap: 16,
+    justifyContent: "space-between",
   },
 
   recordTitle: {
@@ -1501,24 +1538,58 @@ const styles: Record<string, CSSProperties> = {
     paddingTop: 20,
   },
 
-  contactRow: {
-    alignItems: "flex-start",
-    display: "flex",
-    justifyContent: "space-between",
-    gap: 18,
+  compactContactList: {
+    overflow: "hidden",
   },
 
-  contactNameCheckbox: {
-    alignItems: "flex-start",
-    display: "flex",
+  compactContactRow: {
+    alignItems: "center",
+    borderBottom: "1px solid var(--cstc-border)",
+    display: "grid",
     gap: 10,
+    gridTemplateColumns: "28px 1fr auto",
+    minHeight: 54,
+    padding: "8px 12px",
   },
 
-  contactDetails: {
+  compactCheckboxWrap: {
+    alignItems: "center",
+    display: "flex",
+  },
+
+  compactContactButton: {
+    background: "transparent",
+    border: "none",
+    cursor: "pointer",
+    display: "flex",
+    flexDirection: "column",
+    lineHeight: 1.2,
+    padding: 0,
+    textAlign: "left",
+  },
+
+  compactName: {
+    color: "var(--cstc-cobalt)",
+    fontFamily: "Poppins, Arial, sans-serif",
+    fontSize: 14,
+    fontWeight: 700,
+  },
+
+  compactMeta: {
     color: "var(--cstc-copy)",
-    fontSize: 15,
-    lineHeight: "24px",
-    margin: "2px 0",
+    fontSize: 13,
+    lineHeight: "18px",
+  },
+
+  staffTag: {
+    background: "var(--cstc-light-bg)",
+    border: "1px solid var(--cstc-border)",
+    color: "var(--cstc-cobalt)",
+    fontFamily: "Poppins, Arial, sans-serif",
+    fontSize: 11,
+    fontWeight: 700,
+    padding: "4px 7px",
+    textTransform: "uppercase",
   },
 
   checkboxLabelLarge: {
