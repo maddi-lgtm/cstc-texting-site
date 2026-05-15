@@ -1,102 +1,269 @@
+@import url("https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700;800&family=Roboto:wght@400;500;600&display=swap");
+
 /* -----------------------------
-   CITY SPRINGS BRAND SYSTEM
+   CITY SPRINGS THEATRE BRAND SYSTEM
 ------------------------------ */
 
-/* Poppins */
-@font-face {
-  font-display: swap;
-  font-family: Poppins;
-  font-style: normal;
-  font-weight: 400;
-  src: url("/fonts/poppins-v23-latin-regular.woff2") format("woff2");
-}
+:root {
+  --cstc-cobalt: #001699;
+  --cstc-blue: #2d69ff;
+  --cstc-gold: #ffa912;
+  --cstc-gold-hover: #e99e19;
+  --cstc-navy: #04105c;
+  --cstc-black: #121212;
+  --cstc-copy: #585858;
+  --cstc-muted: #767676;
+  --cstc-light-bg: #f3f3f9;
+  --cstc-page-bg: #f7f7fb;
+  --cstc-white: #ffffff;
+  --cstc-border: #d5d5e3;
+  --cstc-soft-border: #e1e5e9;
+  --cstc-danger: #b91c1c;
+  --cstc-success: #15803d;
 
-@font-face {
-  font-display: swap;
-  font-family: Poppins;
-  font-style: normal;
-  font-weight: 600;
-  src: url("/fonts/poppins-v23-latin-600.woff2") format("woff2");
-}
-
-@font-face {
-  font-display: swap;
-  font-family: Poppins;
-  font-style: normal;
-  font-weight: 700;
-  src: url("/fonts/poppins-v23-latin-700.woff2") format("woff2");
-}
-
-@font-face {
-  font-display: swap;
-  font-family: Poppins;
-  font-style: normal;
-  font-weight: 800;
-  src: url("/fonts/poppins-v23-latin-800.woff2") format("woff2");
-}
-
-/* Roboto */
-@font-face {
-  font-display: swap;
-  font-family: Roboto;
-  font-style: normal;
-  font-weight: 400;
-  src: url("/fonts/roboto-v47-latin-regular.woff2") format("woff2");
-}
-
-@font-face {
-  font-display: swap;
-  font-family: Roboto;
-  font-style: normal;
-  font-weight: 500;
-  src: url("/fonts/roboto-v47-latin-500.woff2") format("woff2");
-}
-
-@font-face {
-  font-display: swap;
-  font-family: Roboto;
-  font-style: normal;
-  font-weight: 600;
-  src: url("/fonts/roboto-v47-latin-600.woff2") format("woff2");
+  --cstc-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1),
+    0 4px 6px -2px rgba(0, 0, 0, 0.05);
 }
 
 /* -----------------------------
-   BASE SYSTEM
+   BASE
 ------------------------------ */
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
 
 body {
   margin: 0;
+  padding: 0;
+  color: var(--cstc-copy);
   font-family: Roboto, Arial, sans-serif;
   font-size: 17px;
   line-height: 30px;
-  color: #585858;
-  background: #f5f6f8;
+  background: var(--cstc-page-bg);
+}
+
+* {
+  box-sizing: border-box;
 }
 
 img {
   max-width: 100%;
 }
 
-/* Headings */
-h1, h2, h3, h4 {
-  font-family: Poppins, Arial, sans-serif;
-  font-weight: 600;
-  color: #111;
-  margin: 0 0 10px 0;
+button,
+input,
+textarea,
+select {
+  font-family: Roboto, Arial, sans-serif;
 }
 
-/* Buttons */
 button {
+  transition: background-color 0.3s, color 0.3s, border-color 0.3s,
+    opacity 0.3s, transform 0.15s;
+}
+
+button:hover {
+  opacity: 0.92;
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* -----------------------------
+   TYPOGRAPHY
+------------------------------ */
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  color: var(--cstc-blue);
   font-family: Poppins, Arial, sans-serif;
+  font-weight: 800;
+  letter-spacing: 0.36px;
+  margin: 0;
+  text-transform: uppercase;
 }
 
-/* Utility */
-.page-title {
+.cstc-page-title {
+  color: var(--cstc-cobalt);
+  font-family: Poppins, Arial, sans-serif;
+  font-size: 36px;
+  font-weight: 800;
+  letter-spacing: 0.36px;
+  line-height: 46px;
+  text-transform: uppercase;
+}
+
+.cstc-section-title {
+  color: var(--cstc-blue);
+  font-family: Poppins, Arial, sans-serif;
   font-size: 22px;
-  font-weight: 600;
+  font-weight: 700;
+  line-height: 32px;
+  text-transform: none;
 }
 
-.muted {
-  opacity: 0.6;
+.cstc-overline {
+  color: var(--cstc-cobalt);
+  display: block;
+  font-family: Poppins, Arial, sans-serif;
   font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 20px;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+}
+
+.cstc-muted {
+  color: var(--cstc-muted);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+/* -----------------------------
+   COMPONENTS
+------------------------------ */
+
+.cstc-card {
+  background: var(--cstc-white);
+  border: 1px solid var(--cstc-border);
+  border-radius: 5px;
+  box-shadow: var(--cstc-shadow);
+}
+
+.cstc-input,
+.cstc-textarea,
+.cstc-select {
+  background: #fff;
+  border: 2px solid var(--cstc-soft-border);
+  border-radius: 8px;
+  box-sizing: border-box;
+  color: var(--cstc-copy);
+  font-size: 16px;
+  outline: 0;
+  padding: 12px 16px;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  width: 100%;
+}
+
+.cstc-input:focus,
+.cstc-textarea:focus,
+.cstc-select:focus {
+  border-color: var(--cstc-cobalt);
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
+}
+
+.cstc-textarea {
+  min-height: 180px;
+  resize: vertical;
+}
+
+.cstc-btn-primary {
+  background-color: var(--cstc-gold);
+  border: 2px solid var(--cstc-gold);
+  border-radius: 2px;
+  color: var(--cstc-navy);
+  cursor: pointer;
+  font-family: Poppins, Arial, sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 15px;
+  padding: 15px 20px;
+  text-transform: uppercase;
+}
+
+.cstc-btn-primary:hover {
+  background-color: var(--cstc-gold-hover);
+  border-color: var(--cstc-gold-hover);
+  color: var(--cstc-navy);
+}
+
+.cstc-btn-secondary {
+  background-color: #fff;
+  border: 2px solid var(--cstc-navy);
+  border-radius: 2px;
+  color: var(--cstc-navy);
+  cursor: pointer;
+  font-family: Poppins, Arial, sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 15px;
+  padding: 15px 20px;
+  text-transform: uppercase;
+}
+
+.cstc-btn-secondary:hover {
+  background-color: var(--cstc-navy);
+  color: #fff;
+}
+
+.cstc-btn-danger {
+  background-color: #fff;
+  border: 2px solid var(--cstc-danger);
+  border-radius: 2px;
+  color: var(--cstc-danger);
+  cursor: pointer;
+  font-family: Poppins, Arial, sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 15px;
+  padding: 15px 20px;
+  text-transform: uppercase;
+}
+
+.cstc-btn-danger:hover {
+  background-color: var(--cstc-danger);
+  color: #fff;
+}
+
+.cstc-pill {
+  background-color: var(--cstc-blue);
+  border-radius: 2px;
+  color: #fff;
+  display: inline-block;
+  font-family: Roboto, Arial, sans-serif;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 20px;
+  padding: 5px 15px;
+  text-align: center;
+}
+
+.cstc-pill-light {
+  background: var(--cstc-light-bg);
+  border: 1px solid var(--cstc-border);
+  border-radius: 2px;
+  color: var(--cstc-cobalt);
+  display: inline-block;
+  font-family: Poppins, Arial, sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 15px;
+  padding: 8px 10px;
+}
+
+.cstc-checkbox {
+  accent-color: var(--cstc-gold);
+  height: 18px;
+  width: 18px;
+}
+
+/* -----------------------------
+   RESPONSIVE
+------------------------------ */
+
+@media only screen and (max-width: 900px) {
+  .cstc-page-title {
+    font-size: 28px;
+    line-height: 36px;
+  }
 }
