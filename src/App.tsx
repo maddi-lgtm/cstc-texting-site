@@ -1,8 +1,16 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import type {
+  ChangeEvent,
+  CSSProperties,
+  Dispatch,
+  SetStateAction,
+} from "react";
 import { supabase } from "./lib/supabase";
 import "./styles/brand.css";
 
 type View = "dashboard" | "campaigns" | "contacts";
+type CampaignFilter = "draft" | "ready" | "sent" | "archived";
+type Audience = "staff" | "all";
 
 type Campaign = {
   id: string;
@@ -10,6 +18,7 @@ type Campaign = {
   message_body: string;
   media_url: string | null;
   campaign_status: string | null;
+  archived_at?: string | null;
   created_at?: string;
   sent_at?: string | null;
 };
@@ -23,6 +32,7 @@ type Contact = {
   phone_e164: string | null;
   sms_opt_in: boolean;
   sms_opt_out: boolean;
+  is_staff: boolean | null;
   sms_opt_in_source?: string | null;
   sms_opt_in_date?: string | null;
   sms_opt_out_date?: string | null;
@@ -32,7 +42,7 @@ type CampaignDraft = {
   campaign_name: string;
   message_body: string;
   media_url: string;
-  campaign_status: string;
+  campaign_status: CampaignFilter;
 };
 
 type ContactDraft = {
@@ -43,6 +53,7 @@ type ContactDraft = {
   phone_e164: string;
   sms_opt_in: boolean;
   sms_opt_out: boolean;
+  is_staff: boolean;
 };
 
 const emptyCampaign: CampaignDraft = {
@@ -60,10 +71,15 @@ const emptyContact: ContactDraft = {
   phone_e164: "",
   sms_opt_in: true,
   sms_opt_out: false,
+  is_staff: false,
 };
+
+const campaignFilters: CampaignFilter[] = ["draft", "ready", "sent", "archived"];
 
 export default function App() {
   const [view, setView] = useState<View>("dashboard");
+  const [campaignFilter, setCampaignFilter] =
+    useState<CampaignFilter>("draft");
 
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
@@ -82,6 +98,7 @@ export default function App() {
   );
   const [editingContactId, setEditingContactId] = useState<string | null>(null);
   const [contactForm, setContactForm] = useState<ContactDraft>(emptyContact);
+  const [contactSearch, setContactSearch] = useState("");
 
   const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -89,6 +106,33 @@ export default function App() {
   useEffect(() => {
     loadAll();
   }, []);
+
+  const filteredCampaigns = useMemo(() => {
+    return campaigns.filter((campaign) => {
+      const status = (campaign.campaign_status || "draft") as CampaignFilter;
+      return status === campaignFilter;
+    });
+  }, [campaigns, campaignFilter]);
+
+  const filteredContacts = useMemo(() => {
+    const search = contactSearch.trim().toLowerCase();
+
+    if (!search) return contacts;
+
+    return contacts.filter((contact) => {
+      const haystack = [
+        contact.first_name,
+        contact.last_name,
+        contact.email,
+        contact.phone_raw,
+        contact.phone_e164,
+      ]
+        .join(" ")
+        .toLowerCase();
+
+      return haystack.includes(search);
+    });
+  }, [contacts, contactSearch]);
 
   async function loadAll() {
     const [campaignResult, contactResult] = await Promise.all([
@@ -124,7 +168,7 @@ export default function App() {
     window.setTimeout(() => setNotice(null), 5000);
   }
 
-  function navButtonStyle(active: boolean): React.CSSProperties {
+  function navButtonStyle(active: boolean): CSSProperties {
     return {
       ...styles.navBtn,
       background: active ? "rgba(255, 169, 18, 0.18)" : "transparent",
@@ -136,19 +180,18 @@ export default function App() {
   function normalizePhone(rawPhone: string) {
     const digits = rawPhone.replace(/\D/g, "");
 
-    if (digits.length === 10) {
-      return `+1${digits}`;
-    }
-
-    if (digits.length === 11 && digits.startsWith("1")) {
-      return `+${digits}`;
-    }
-
+    if (digits.length === 10) return `+1${digits}`;
+    if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
     if (rawPhone.trim().startsWith("+") && digits.length >= 11) {
       return `+${digits}`;
     }
 
     return rawPhone;
+  }
+
+  function openCampaigns(filter: CampaignFilter = "draft") {
+    setCampaignFilter(filter);
+    setView("campaigns");
   }
 
   function isCampaignDirty() {
@@ -170,7 +213,8 @@ export default function App() {
       campaignForm.campaign_name !== (original.campaign_name || "") ||
       campaignForm.message_body !== (original.message_body || "") ||
       campaignForm.media_url !== (original.media_url || "") ||
-      campaignForm.campaign_status !== (original.campaign_status || "draft")
+      campaignForm.campaign_status !==
+        ((original.campaign_status || "draft") as CampaignFilter)
     );
   }
 
@@ -193,7 +237,10 @@ export default function App() {
 
     setCampaignMode("create");
     setEditingCampaignId(null);
-    setCampaignForm(emptyCampaign);
+    setCampaignForm({
+      ...emptyCampaign,
+      campaign_status: campaignFilter === "archived" ? "draft" : campaignFilter,
+    });
   }
 
   function startEditCampaign(campaign: Campaign) {
@@ -207,7 +254,7 @@ export default function App() {
       campaign_name: campaign.campaign_name || "",
       message_body: campaign.message_body || "",
       media_url: campaign.media_url || "",
-      campaign_status: campaign.campaign_status || "draft",
+      campaign_status: (campaign.campaign_status || "draft") as CampaignFilter,
     });
   }
 
@@ -224,12 +271,18 @@ export default function App() {
 
     setLoading(true);
 
+    const archivedAt =
+      campaignForm.campaign_status === "archived"
+        ? new Date().toISOString()
+        : null;
+
     if (campaignMode === "create") {
       const { error } = await supabase.from("sms_campaigns").insert({
         campaign_name: campaignForm.campaign_name,
         message_body: campaignForm.message_body,
         media_url: campaignForm.media_url || null,
-        campaign_status: campaignForm.campaign_status || "draft",
+        campaign_status: campaignForm.campaign_status,
+        archived_at: archivedAt,
       });
 
       if (error) {
@@ -248,7 +301,8 @@ export default function App() {
           campaign_name: campaignForm.campaign_name,
           message_body: campaignForm.message_body,
           media_url: campaignForm.media_url || null,
-          campaign_status: campaignForm.campaign_status || "draft",
+          campaign_status: campaignForm.campaign_status,
+          archived_at: archivedAt,
         })
         .eq("id", editingCampaignId);
 
@@ -264,17 +318,21 @@ export default function App() {
     setLoading(false);
   }
 
-  async function sendCampaign(campaign: Campaign) {
-    const ok = window.confirm(
-      `Send "${campaign.campaign_name}" to all currently opted-in contacts?`
-    );
+  async function sendCampaign(campaign: Campaign, audience: Audience) {
+    const label =
+      audience === "staff" ? "staff test contacts only" : "all opted-in contacts";
+
+    const ok = window.confirm(`Send "${campaign.campaign_name}" to ${label}?`);
 
     if (!ok) return;
 
     setLoading(true);
 
     const { data, error } = await supabase.functions.invoke("send-campaign", {
-      body: { campaign_id: campaign.id },
+      body: {
+        campaign_id: campaign.id,
+        audience,
+      },
     });
 
     setLoading(false);
@@ -315,7 +373,8 @@ export default function App() {
       contactForm.phone_raw !== (original.phone_raw || "") ||
       contactForm.phone_e164 !== (original.phone_e164 || "") ||
       contactForm.sms_opt_in !== original.sms_opt_in ||
-      contactForm.sms_opt_out !== original.sms_opt_out
+      contactForm.sms_opt_out !== original.sms_opt_out ||
+      contactForm.is_staff !== Boolean(original.is_staff)
     );
   }
 
@@ -356,6 +415,7 @@ export default function App() {
       phone_e164: contact.phone_e164 || "",
       sms_opt_in: Boolean(contact.sms_opt_in),
       sms_opt_out: Boolean(contact.sms_opt_out),
+      is_staff: Boolean(contact.is_staff),
     });
   }
 
@@ -379,6 +439,7 @@ export default function App() {
       phone_e164: formattedPhone,
       sms_opt_in: contactForm.sms_opt_in,
       sms_opt_out: contactForm.sms_opt_out,
+      is_staff: contactForm.is_staff,
       sms_opt_in_date: contactForm.sms_opt_in ? new Date().toISOString() : null,
       sms_opt_out_date: contactForm.sms_opt_out
         ? new Date().toISOString()
@@ -415,10 +476,151 @@ export default function App() {
     setLoading(false);
   }
 
+  async function toggleContactSmsActive(contact: Contact) {
+    const currentlyActive = contact.sms_opt_in && !contact.sms_opt_out;
+    const nextActive = !currentlyActive;
+
+    const { error } = await supabase
+      .from("contacts")
+      .update({
+        sms_opt_in: nextActive,
+        sms_opt_out: !nextActive,
+        sms_opt_in_date: nextActive
+          ? new Date().toISOString()
+          : contact.sms_opt_in_date,
+        sms_opt_out_date: !nextActive ? new Date().toISOString() : null,
+      })
+      .eq("id", contact.id);
+
+    if (error) {
+      showNotice(`Contact update failed: ${error.message}`);
+      return;
+    }
+
+    await loadAll();
+  }
+
   function fullName(contact: Contact) {
     const name = `${contact.first_name || ""} ${contact.last_name || ""}`.trim();
-
     return name || "No Name";
+  }
+
+  function exportContactsCsv() {
+    const headers = [
+      "first_name",
+      "last_name",
+      "email",
+      "phone_raw",
+      "phone_e164",
+      "sms_opt_in",
+      "sms_opt_out",
+      "is_staff",
+    ];
+
+    const rows = contacts.map((contact) =>
+      headers.map((key) => {
+        const value = String((contact as unknown as Record<string, unknown>)[key] ?? "");
+        return `"${value.replace(/"/g, '""')}"`;
+      })
+    );
+
+    const csv = [headers.join(","), ...rows.map((row) => row.join(","))].join(
+      "\n"
+    );
+
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+
+    link.href = url;
+    link.download = "cstc_contacts.csv";
+    link.click();
+
+    URL.revokeObjectURL(url);
+  }
+
+  function parseCsvLine(line: string) {
+    const values: string[] = [];
+    let current = "";
+    let inQuotes = false;
+
+    for (let index = 0; index < line.length; index += 1) {
+      const char = line[index];
+      const nextChar = line[index + 1];
+
+      if (char === '"' && inQuotes && nextChar === '"') {
+        current += '"';
+        index += 1;
+      } else if (char === '"') {
+        inQuotes = !inQuotes;
+      } else if (char === "," && !inQuotes) {
+        values.push(current.trim());
+        current = "";
+      } else {
+        current += char;
+      }
+    }
+
+    values.push(current.trim());
+    return values;
+  }
+
+  async function importContactsCsv(file: File) {
+    const text = await file.text();
+    const lines = text.split(/\r?\n/).filter((line) => line.trim());
+
+    if (lines.length < 2) {
+      showNotice("CSV appears to be empty.");
+      return;
+    }
+
+    const headers = parseCsvLine(lines[0]).map((header) => header.trim());
+
+    const rows = lines.slice(1).map((line) => {
+      const values = parseCsvLine(line);
+      const record: Record<string, string> = {};
+
+      headers.forEach((header, index) => {
+        record[header] = values[index] || "";
+      });
+
+      const phoneRaw = record.phone_raw || record.phone || "";
+      const phoneE164 = record.phone_e164 || normalizePhone(phoneRaw);
+      const smsOptOut = record.sms_opt_out?.toLowerCase() === "true";
+      const smsOptIn =
+        record.sms_opt_in?.toLowerCase() === "false" ? false : !smsOptOut;
+
+      return {
+        first_name: record.first_name || null,
+        last_name: record.last_name || null,
+        email: record.email || null,
+        phone_raw: phoneRaw || phoneE164,
+        phone_e164: phoneE164,
+        sms_opt_in: smsOptIn,
+        sms_opt_out: smsOptOut,
+        is_staff: record.is_staff?.toLowerCase() === "true",
+      };
+    });
+
+    const { error } = await supabase.from("contacts").insert(rows);
+
+    if (error) {
+      showNotice(`CSV import failed: ${error.message}`);
+      return;
+    }
+
+    showNotice(`Imported ${rows.length} contacts.`);
+    await loadAll();
+  }
+
+  function handleCsvInput(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+
+    if (file) {
+      importContactsCsv(file);
+    }
+
+    event.target.value = "";
   }
 
   const activeCampaign = editingCampaignId
@@ -447,7 +649,7 @@ export default function App() {
 
           <button
             style={navButtonStyle(view === "campaigns")}
-            onClick={() => setView("campaigns")}
+            onClick={() => openCampaigns(campaignFilter)}
           >
             Campaigns
           </button>
@@ -489,9 +691,25 @@ export default function App() {
             )}
 
             {view === "contacts" && (
-              <button className="cstc-btn-primary" onClick={startNewContact}>
-                New Contact
-              </button>
+              <>
+                <label className="cstc-btn-secondary" style={styles.fileButton}>
+                  Import CSV
+                  <input
+                    type="file"
+                    accept=".csv"
+                    onChange={handleCsvInput}
+                    style={styles.hiddenFileInput}
+                  />
+                </label>
+
+                <button className="cstc-btn-secondary" onClick={exportContactsCsv}>
+                  Export CSV
+                </button>
+
+                <button className="cstc-btn-primary" onClick={startNewContact}>
+                  New Contact
+                </button>
+              </>
             )}
           </div>
         </header>
@@ -500,19 +718,31 @@ export default function App() {
 
         {view === "dashboard" && (
           <section style={styles.dashboardGrid}>
-            <div className="cstc-card" style={styles.statCard}>
+            <button
+              className="cstc-card"
+              style={{ ...styles.statCard, ...styles.tileButton }}
+              onClick={() => openCampaigns("draft")}
+            >
               <span className="cstc-overline">Campaigns</span>
               <div style={styles.statNumber}>{campaigns.length}</div>
-              <p style={styles.statCopy}>Total campaign records</p>
-            </div>
+              <p style={styles.statCopy}>View campaign records</p>
+            </button>
 
-            <div className="cstc-card" style={styles.statCard}>
+            <button
+              className="cstc-card"
+              style={{ ...styles.statCard, ...styles.tileButton }}
+              onClick={() => setView("contacts")}
+            >
               <span className="cstc-overline">Contacts</span>
               <div style={styles.statNumber}>{contacts.length}</div>
-              <p style={styles.statCopy}>Total contact records</p>
-            </div>
+              <p style={styles.statCopy}>View contact records</p>
+            </button>
 
-            <div className="cstc-card" style={styles.statCard}>
+            <button
+              className="cstc-card"
+              style={{ ...styles.statCard, ...styles.tileButton }}
+              onClick={() => setView("contacts")}
+            >
               <span className="cstc-overline">Opted In</span>
               <div style={styles.statNumber}>
                 {
@@ -522,7 +752,24 @@ export default function App() {
                 }
               </div>
               <p style={styles.statCopy}>Eligible to receive campaigns</p>
-            </div>
+            </button>
+
+            <button
+              className="cstc-card"
+              style={{ ...styles.statCard, ...styles.tileButton }}
+              onClick={() => openCampaigns("archived")}
+            >
+              <span className="cstc-overline">Campaign Archives</span>
+              <div style={styles.statNumber}>
+                {
+                  campaigns.filter(
+                    (campaign) =>
+                      (campaign.campaign_status || "draft") === "archived"
+                  ).length
+                }
+              </div>
+              <p style={styles.statCopy}>View archived campaigns</p>
+            </button>
           </section>
         )}
 
@@ -532,11 +779,33 @@ export default function App() {
               <div style={styles.sectionHeader}>
                 <h2 className="cstc-section-title">Campaign Library</h2>
                 <p style={styles.sectionCopy}>
-                  Create, edit, and send SMS/MMS campaigns.
+                  Create, edit, test, send, and archive SMS/MMS campaigns.
                 </p>
               </div>
 
-              {campaigns.map((campaign) => (
+              <div style={styles.filterBar}>
+                {campaignFilters.map((filter) => (
+                  <button
+                    key={filter}
+                    className={
+                      campaignFilter === filter
+                        ? "cstc-btn-primary"
+                        : "cstc-btn-secondary"
+                    }
+                    onClick={() => setCampaignFilter(filter)}
+                  >
+                    {filter}
+                  </button>
+                ))}
+              </div>
+
+              {filteredCampaigns.length === 0 && (
+                <div className="cstc-card" style={styles.emptyState}>
+                  No {campaignFilter} campaigns.
+                </div>
+              )}
+
+              {filteredCampaigns.map((campaign) => (
                 <article
                   key={campaign.id}
                   className="cstc-card"
@@ -576,8 +845,15 @@ export default function App() {
                     </button>
 
                     <button
+                      className="cstc-btn-secondary"
+                      onClick={() => sendCampaign(campaign, "staff")}
+                    >
+                      Send Test
+                    </button>
+
+                    <button
                       className="cstc-btn-primary"
-                      onClick={() => sendCampaign(campaign)}
+                      onClick={() => sendCampaign(campaign, "all")}
                     >
                       Send
                     </button>
@@ -587,6 +863,13 @@ export default function App() {
             </div>
 
             <div>
+              <div style={styles.sectionHeader}>
+                <h2 className="cstc-section-title">Campaign Editor</h2>
+                <p style={styles.sectionCopy}>
+                  Create or update the selected campaign.
+                </p>
+              </div>
+
               <CampaignEditor
                 mode={campaignMode}
                 campaign={activeCampaign || null}
@@ -605,11 +888,26 @@ export default function App() {
               <div style={styles.sectionHeader}>
                 <h2 className="cstc-section-title">Contact List</h2>
                 <p style={styles.sectionCopy}>
-                  Manage names, phone numbers, emails, and SMS consent.
+                  Manage names, phone numbers, emails, staff test contacts, and
+                  SMS consent.
                 </p>
               </div>
 
-              {contacts.map((contact) => (
+              <input
+                className="cstc-input"
+                value={contactSearch}
+                onChange={(event) => setContactSearch(event.target.value)}
+                placeholder="Search contacts by name, email, or phone"
+                style={styles.searchInput}
+              />
+
+              {filteredContacts.length === 0 && (
+                <div className="cstc-card" style={styles.emptyState}>
+                  No contacts found.
+                </div>
+              )}
+
+              {filteredContacts.map((contact) => (
                 <article
                   key={contact.id}
                   className="cstc-card"
@@ -623,25 +921,27 @@ export default function App() {
                 >
                   <div style={styles.contactRow}>
                     <div>
-                      <h3 style={styles.recordTitle}>{fullName(contact)}</h3>
+                      <label style={styles.contactNameCheckbox}>
+                        <input
+                          className="cstc-checkbox"
+                          type="checkbox"
+                          checked={contact.sms_opt_in && !contact.sms_opt_out}
+                          onChange={() => toggleContactSmsActive(contact)}
+                        />
+
+                        <span style={styles.recordTitle}>{fullName(contact)}</span>
+                      </label>
+
                       <p style={styles.contactDetails}>
                         {contact.phone_e164 || contact.phone_raw || "No phone"}
                       </p>
                       <p style={styles.contactDetails}>
                         {contact.email || "No email"}
                       </p>
-                    </div>
 
-                    <div style={styles.contactStatus}>
-                      <label style={styles.checkboxLabel}>
-                        <input
-                          className="cstc-checkbox"
-                          type="checkbox"
-                          checked={contact.sms_opt_in && !contact.sms_opt_out}
-                          readOnly
-                        />
-                        SMS Active
-                      </label>
+                      {contact.is_staff && (
+                        <span className="cstc-pill-light">Staff Test</span>
+                      )}
                     </div>
                   </div>
 
@@ -658,6 +958,13 @@ export default function App() {
             </div>
 
             <div>
+              <div style={styles.sectionHeader}>
+                <h2 className="cstc-section-title">Contact Editor</h2>
+                <p style={styles.sectionCopy}>
+                  Add or update a contact record.
+                </p>
+              </div>
+
               <ContactEditor
                 mode={contactMode}
                 contact={activeContact || null}
@@ -678,7 +985,7 @@ type CampaignEditorProps = {
   mode: "none" | "create" | "edit";
   campaign: Campaign | null;
   form: CampaignDraft;
-  setForm: React.Dispatch<React.SetStateAction<CampaignDraft>>;
+  setForm: Dispatch<SetStateAction<CampaignDraft>>;
   onCancel: () => void;
   onSave: () => void;
 };
@@ -755,7 +1062,10 @@ function CampaignEditor({
         className="cstc-select"
         value={form.campaign_status}
         onChange={(event) =>
-          setForm({ ...form, campaign_status: event.target.value })
+          setForm({
+            ...form,
+            campaign_status: event.target.value as CampaignFilter,
+          })
         }
       >
         <option value="draft">Draft</option>
@@ -780,7 +1090,7 @@ type ContactEditorProps = {
   mode: "none" | "create" | "edit";
   contact: Contact | null;
   form: ContactDraft;
-  setForm: React.Dispatch<React.SetStateAction<ContactDraft>>;
+  setForm: Dispatch<SetStateAction<ContactDraft>>;
   onCancel: () => void;
   onSave: () => void;
 };
@@ -899,6 +1209,18 @@ function ContactEditor({
         SMS Opt-In
       </label>
 
+      <label style={styles.checkboxLabelLarge}>
+        <input
+          className="cstc-checkbox"
+          type="checkbox"
+          checked={form.is_staff}
+          onChange={(event) =>
+            setForm({ ...form, is_staff: event.target.checked })
+          }
+        />
+        Staff Test Contact
+      </label>
+
       <div style={styles.editorActions}>
         <button className="cstc-btn-secondary" onClick={onCancel}>
           Cancel
@@ -911,7 +1233,7 @@ function ContactEditor({
   );
 }
 
-const styles: Record<string, React.CSSProperties> = {
+const styles: Record<string, CSSProperties> = {
   shell: {
     display: "flex",
     minHeight: "100vh",
@@ -1011,7 +1333,9 @@ const styles: Record<string, React.CSSProperties> = {
   topbarActions: {
     alignItems: "center",
     display: "flex",
+    flexWrap: "wrap",
     gap: 12,
+    justifyContent: "flex-end",
   },
 
   loadingPill: {
@@ -1040,11 +1364,16 @@ const styles: Record<string, React.CSSProperties> = {
   dashboardGrid: {
     display: "grid",
     gap: 22,
-    gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+    gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
   },
 
   statCard: {
     padding: 24,
+  },
+
+  tileButton: {
+    cursor: "pointer",
+    textAlign: "left",
   },
 
   statNumber: {
@@ -1086,6 +1415,17 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 15,
     lineHeight: "24px",
     margin: "6px 0 0",
+  },
+
+  filterBar: {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: 10,
+    marginBottom: 18,
+  },
+
+  emptyState: {
+    padding: 22,
   },
 
   listCard: {
@@ -1168,26 +1508,17 @@ const styles: Record<string, React.CSSProperties> = {
     gap: 18,
   },
 
+  contactNameCheckbox: {
+    alignItems: "flex-start",
+    display: "flex",
+    gap: 10,
+  },
+
   contactDetails: {
     color: "var(--cstc-copy)",
     fontSize: 15,
     lineHeight: "24px",
     margin: "2px 0",
-  },
-
-  contactStatus: {
-    minWidth: 130,
-  },
-
-  checkboxLabel: {
-    alignItems: "center",
-    color: "var(--cstc-cobalt)",
-    display: "flex",
-    fontFamily: "Poppins, Arial, sans-serif",
-    fontSize: 13,
-    fontWeight: 600,
-    gap: 8,
-    textTransform: "uppercase",
   },
 
   checkboxLabelLarge: {
@@ -1206,5 +1537,18 @@ const styles: Record<string, React.CSSProperties> = {
     display: "grid",
     gap: 14,
     gridTemplateColumns: "1fr 1fr",
+  },
+
+  searchInput: {
+    marginBottom: 18,
+  },
+
+  fileButton: {
+    display: "inline-block",
+    position: "relative",
+  },
+
+  hiddenFileInput: {
+    display: "none",
   },
 };
