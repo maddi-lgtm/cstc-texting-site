@@ -19,8 +19,6 @@ type View =
 
 type CampaignFilter = "all" | "draft" | "ready" | "sent" | "archived";
 type CampaignStatus = "draft" | "ready" | "sent" | "archived";
-type Audience = "staff" | "all";
-
 type ContactType = "donor" | "patron" | "other";
 type ContactSort = "last_name" | "first_name" | "email" | "phone" | "group";
 
@@ -31,6 +29,11 @@ type ConfirmModalState = {
   cancelText?: string;
   requireText?: string;
   danger?: boolean;
+} | null;
+
+type SendModalState = {
+  campaign: Campaign;
+  sendType: "test" | "campaign";
 } | null;
 
 type Campaign = {
@@ -209,6 +212,11 @@ export default function App() {
   const [confirmModalInput, setConfirmModalInput] = useState("");
   const confirmResolverRef = useRef<((value: boolean) => void) | null>(null);
 
+  const [sendModal, setSendModal] = useState<SendModalState>(null);
+  const [sendAllContacts, setSendAllContacts] = useState(false);
+  const [sendSelectedTagIds, setSendSelectedTagIds] = useState<string[]>([]);
+  const [sendConfirmText, setSendConfirmText] = useState("");
+
   const [auditDetail, setAuditDetail] = useState<AuditLog | null>(null);
 
   useEffect(() => {
@@ -305,6 +313,12 @@ export default function App() {
   const allVisibleContactsSelected =
     visibleContactIds.length > 0 &&
     selectedVisibleContactCount === visibleContactIds.length;
+
+  const sendRecipientCount = useMemo(() => {
+    if (!sendModal) return 0;
+
+    return getSendRecipients(sendAllContacts, sendSelectedTagIds).length;
+  }, [sendModal, sendAllContacts, sendSelectedTagIds, contacts, tagMembers]);
 
   async function loadAll() {
     const [
@@ -443,19 +457,28 @@ export default function App() {
     return campaigns.find((campaign) => campaign.id === campaignId) || null;
   }
 
-  function getAudienceCount(audience: Audience) {
-    return contacts.filter((contact) => {
-      const eligible =
-        contact.sms_opt_in && !contact.sms_opt_out && Boolean(contact.phone_e164);
+  function getEligibleContacts() {
+    return contacts.filter(
+      (contact) =>
+        contact.sms_opt_in &&
+        !contact.sms_opt_out &&
+        Boolean(contact.phone_e164)
+    );
+  }
 
-      if (!eligible) return false;
+  function getSendRecipients(allContacts: boolean, tagIds: string[]) {
+    const eligibleContacts = getEligibleContacts();
 
-      if (audience === "staff") {
-        return tagsForContact(contact.id).some((tag) => tag.tag_name === "Staff");
-      }
+    if (allContacts) return eligibleContacts;
 
-      return true;
-    }).length;
+    if (tagIds.length === 0) return [];
+
+    return eligibleContacts.filter((contact) =>
+      tagMembers.some(
+        (member) =>
+          member.contact_id === contact.id && tagIds.includes(member.tag_id)
+      )
+    );
   }
 
   function isContactSelected(contactId: string) {
@@ -664,6 +687,69 @@ export default function App() {
     setView("contacts");
   }
 
+  function openSendModal(campaign: Campaign, sendType: "test" | "campaign") {
+    const staffTag = tags.find(
+      (tag) => tag.tag_name.toLowerCase() === "staff"
+    );
+
+    setSendModal({ campaign, sendType });
+    setSendConfirmText("");
+
+    if (sendType === "test") {
+      setSendAllContacts(false);
+      setSendSelectedTagIds(staffTag ? [staffTag.id] : []);
+    } else {
+      setSendAllContacts(true);
+      setSendSelectedTagIds([]);
+    }
+  }
+
+  function closeSendModal() {
+    setSendModal(null);
+    setSendAllContacts(false);
+    setSendSelectedTagIds([]);
+    setSendConfirmText("");
+  }
+
+  async function executeSendCampaign() {
+    if (!sendModal) return;
+
+    if (!sendAllContacts && sendSelectedTagIds.length === 0) {
+      showNotice("Choose at least one audience group.");
+      return;
+    }
+
+    if (sendConfirmText !== "SEND") {
+      showNotice("Type SEND to confirm.");
+      return;
+    }
+
+    setLoading(true);
+
+    const { data, error } = await supabase.functions.invoke("send-campaign", {
+      body: {
+        campaign_id: sendModal.campaign.id,
+        audience: sendAllContacts ? "all" : "tags",
+        tag_ids: sendSelectedTagIds,
+        send_type: sendModal.sendType,
+      },
+    });
+
+    setLoading(false);
+
+    if (error) {
+      showNotice(`Send failed: ${error.message}`);
+      return;
+    }
+
+    const sentCount =
+      data && typeof data.sent_count === "number" ? data.sent_count : "Unknown";
+
+    showNotice(`Send complete. Sent count: ${sentCount}`);
+    closeSendModal();
+    await loadAll();
+  }
+
   function isCampaignDirty() {
     if (campaignMode === "none") return false;
 
@@ -837,59 +923,6 @@ export default function App() {
     }
 
     showNotice(`Campaign moved to ${status}.`);
-    await loadAll();
-  }
-
-  async function sendCampaign(campaign: Campaign, audience: Audience) {
-    const count = getAudienceCount(audience);
-
-    if (audience === "staff") {
-      const ok = await requestConfirmation({
-        title: "Send Staff Test?",
-        message: `Send test "${campaign.campaign_name}" to ${count} Staff audience group contact(s)?`,
-        confirmText: "Send Test",
-        cancelText: "Cancel",
-      });
-
-      if (!ok) return;
-    }
-
-    if (audience === "all") {
-      const ok = await requestConfirmation({
-        title: "Send Campaign?",
-        message: `This will send "${campaign.campaign_name}" to ${count} opted-in contact(s). Type SEND to confirm.`,
-        confirmText: "Send Campaign",
-        cancelText: "Cancel",
-        requireText: "SEND",
-        danger: true,
-      });
-
-      if (!ok) {
-        showNotice("Send cancelled.");
-        return;
-      }
-    }
-
-    setLoading(true);
-
-    const { data, error } = await supabase.functions.invoke("send-campaign", {
-      body: {
-        campaign_id: campaign.id,
-        audience,
-      },
-    });
-
-    setLoading(false);
-
-    if (error) {
-      showNotice(`Send failed: ${error.message}`);
-      return;
-    }
-
-    const sentCount =
-      data && typeof data.sent_count === "number" ? data.sent_count : "Unknown";
-
-    showNotice(`Campaign send complete. Sent count: ${sentCount}`);
     await loadAll();
   }
 
@@ -1673,16 +1706,16 @@ export default function App() {
 
                     <button
                       className="cstc-btn-small"
-                      onClick={() => sendCampaign(campaign, "staff")}
+                      onClick={() => openSendModal(campaign, "test")}
                     >
                       Send Test
                     </button>
 
                     <button
                       className="cstc-btn-primary"
-                      onClick={() => sendCampaign(campaign, "all")}
+                      onClick={() => openSendModal(campaign, "campaign")}
                     >
-                      Send
+                      Send Campaign
                     </button>
                   </div>
                 </article>
@@ -2031,6 +2064,22 @@ export default function App() {
         )}
       </main>
 
+      {sendModal && (
+        <SendCampaignModal
+          modal={sendModal}
+          tags={tags}
+          sendAllContacts={sendAllContacts}
+          setSendAllContacts={setSendAllContacts}
+          selectedTagIds={sendSelectedTagIds}
+          setSelectedTagIds={setSendSelectedTagIds}
+          recipientCount={sendRecipientCount}
+          confirmText={sendConfirmText}
+          setConfirmText={setSendConfirmText}
+          onCancel={closeSendModal}
+          onSend={executeSendCampaign}
+        />
+      )}
+
       {confirmModal && (
         <ConfirmModal
           modal={confirmModal}
@@ -2325,6 +2374,134 @@ function ContactEditor({
         </button>
       </div>
     </aside>
+  );
+}
+
+function SendCampaignModal({
+  modal,
+  tags,
+  sendAllContacts,
+  setSendAllContacts,
+  selectedTagIds,
+  setSelectedTagIds,
+  recipientCount,
+  confirmText,
+  setConfirmText,
+  onCancel,
+  onSend,
+}: {
+  modal: NonNullable<SendModalState>;
+  tags: ContactTag[];
+  sendAllContacts: boolean;
+  setSendAllContacts: Dispatch<SetStateAction<boolean>>;
+  selectedTagIds: string[];
+  setSelectedTagIds: Dispatch<SetStateAction<string[]>>;
+  recipientCount: number;
+  confirmText: string;
+  setConfirmText: Dispatch<SetStateAction<string>>;
+  onCancel: () => void;
+  onSend: () => void;
+}) {
+  const canSend =
+    confirmText === "SEND" &&
+    recipientCount > 0 &&
+    (sendAllContacts || selectedTagIds.length > 0);
+
+  function toggleTag(tagId: string) {
+    setSendAllContacts(false);
+    setSelectedTagIds((current) =>
+      current.includes(tagId)
+        ? current.filter((id) => id !== tagId)
+        : [...current, tagId]
+    );
+  }
+
+  return (
+    <div style={styles.modalBackdrop}>
+      <div className="cstc-card" style={styles.sendModalCard}>
+        <span className="cstc-overline">
+          {modal.sendType === "test" ? "Staff/Test Send" : "Campaign Send"}
+        </span>
+
+        <h2 className="cstc-section-title">{modal.campaign.campaign_name}</h2>
+
+        <p style={styles.modalMessage}>
+          Choose who should receive this message. Only SMS opted-in contacts with
+          valid phone numbers are counted.
+        </p>
+
+        <div style={styles.sendAudienceBox}>
+          {modal.sendType === "campaign" && (
+            <label style={styles.sendAudienceOption}>
+              <input
+                className="cstc-checkbox"
+                type="checkbox"
+                checked={sendAllContacts}
+                onChange={(event) => {
+                  setSendAllContacts(event.target.checked);
+                  if (event.target.checked) {
+                    setSelectedTagIds([]);
+                  }
+                }}
+              />
+              <span>
+                <strong>All opted-in contacts</strong>
+                <small>Send to every eligible contact in the system.</small>
+              </span>
+            </label>
+          )}
+
+          <div style={styles.sendGroupHeader}>Audience Groups</div>
+
+          <div style={styles.sendGroupGrid}>
+            {tags.map((tag) => (
+              <label key={tag.id} style={styles.checkboxLabelSmall}>
+                <input
+                  className="cstc-checkbox"
+                  type="checkbox"
+                  checked={selectedTagIds.includes(tag.id)}
+                  disabled={sendAllContacts}
+                  onChange={() => toggleTag(tag.id)}
+                />
+                {tag.tag_name}
+              </label>
+            ))}
+          </div>
+        </div>
+
+        <div style={styles.sendCountBox}>
+          <span className="cstc-overline">Estimated Recipients</span>
+          <strong>{recipientCount}</strong>
+          <p>
+            This count removes opted-out contacts and contacts without a valid
+            SMS-formatted phone number.
+          </p>
+        </div>
+
+        <label style={styles.fieldLabel}>Type SEND to confirm</label>
+        <input
+          className="cstc-input"
+          value={confirmText}
+          onChange={(event) => setConfirmText(event.target.value)}
+          placeholder="SEND"
+          autoFocus
+        />
+
+        <div style={styles.modalActions}>
+          <button className="cstc-btn-secondary" onClick={onCancel}>
+            Cancel
+          </button>
+
+          <button
+            className="cstc-btn-danger"
+            disabled={!canSend}
+            onClick={onSend}
+          >
+            {modal.sendType === "test" ? "Send Test" : "Send Campaign"}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -3147,6 +3324,12 @@ const styles: Record<string, CSSProperties> = {
     width: "100%",
   },
 
+  sendModalCard: {
+    maxWidth: 720,
+    padding: 28,
+    width: "100%",
+  },
+
   modalMessage: {
     color: "var(--cstc-copy)",
     fontSize: 16,
@@ -3165,5 +3348,45 @@ const styles: Record<string, CSSProperties> = {
     justifyContent: "flex-end",
     marginTop: 24,
     paddingTop: 20,
+  },
+
+  sendAudienceBox: {
+    border: "1px solid var(--cstc-border)",
+    borderRadius: 5,
+    marginTop: 20,
+    padding: 16,
+  },
+
+  sendAudienceOption: {
+    alignItems: "flex-start",
+    borderBottom: "1px solid var(--cstc-border)",
+    color: "var(--cstc-cobalt)",
+    display: "flex",
+    gap: 10,
+    paddingBottom: 14,
+  },
+
+  sendGroupHeader: {
+    color: "var(--cstc-cobalt)",
+    fontFamily: "Poppins, Arial, sans-serif",
+    fontSize: 13,
+    fontWeight: 700,
+    letterSpacing: ".04em",
+    margin: "16px 0 10px",
+    textTransform: "uppercase",
+  },
+
+  sendGroupGrid: {
+    display: "grid",
+    gap: 10,
+    gridTemplateColumns: "1fr 1fr",
+  },
+
+  sendCountBox: {
+    background: "var(--cstc-light-bg)",
+    border: "1px solid var(--cstc-border)",
+    borderRadius: 5,
+    marginTop: 18,
+    padding: 16,
   },
 };
