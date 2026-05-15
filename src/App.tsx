@@ -1,8 +1,4 @@
-import {
-  useEffect,
-  useMemo,
-  useState,
-} from "react";
+import { useEffect, useMemo, useState } from "react";
 import type {
   ChangeEvent,
   CSSProperties,
@@ -13,8 +9,13 @@ import { supabase } from "./lib/supabase";
 import "./styles/brand.css";
 
 type View = "dashboard" | "campaigns" | "contacts";
-type CampaignFilter = "draft" | "ready" | "sent" | "archived";
+type CampaignFilter = "all" | "draft" | "ready" | "sent" | "archived";
+type CampaignStatus = "draft" | "ready" | "sent" | "archived";
 type Audience = "staff" | "all";
+
+type ContactTypeFilter = "all" | "donor" | "patron" | "other";
+type ContactType = "donor" | "patron" | "other";
+type ContactSort = "last_name" | "first_name" | "email" | "phone" | "type";
 
 type Campaign = {
   id: string;
@@ -37,6 +38,7 @@ type Contact = {
   sms_opt_in: boolean;
   sms_opt_out: boolean;
   is_staff: boolean | null;
+  contact_type: ContactType | null;
   sms_opt_in_source?: string | null;
   sms_opt_in_date?: string | null;
   sms_opt_out_date?: string | null;
@@ -46,7 +48,7 @@ type CampaignDraft = {
   campaign_name: string;
   message_body: string;
   media_url: string;
-  campaign_status: CampaignFilter;
+  campaign_status: CampaignStatus;
 };
 
 type ContactDraft = {
@@ -54,10 +56,10 @@ type ContactDraft = {
   last_name: string;
   email: string;
   phone_raw: string;
-  phone_e164: string;
   sms_opt_in: boolean;
   sms_opt_out: boolean;
   is_staff: boolean;
+  contact_type: ContactType;
 };
 
 const emptyCampaign: CampaignDraft = {
@@ -72,18 +74,31 @@ const emptyContact: ContactDraft = {
   last_name: "",
   email: "",
   phone_raw: "",
-  phone_e164: "",
   sms_opt_in: true,
   sms_opt_out: false,
   is_staff: false,
+  contact_type: "other",
 };
 
-const campaignFilters: CampaignFilter[] = ["draft", "ready", "sent", "archived"];
+const campaignFilters: CampaignFilter[] = [
+  "all",
+  "draft",
+  "ready",
+  "sent",
+  "archived",
+];
+
+const contactTypeFilters: ContactTypeFilter[] = [
+  "all",
+  "donor",
+  "patron",
+  "other",
+];
 
 export default function App() {
   const [view, setView] = useState<View>("dashboard");
   const [campaignFilter, setCampaignFilter] =
-    useState<CampaignFilter>("draft");
+    useState<CampaignFilter>("all");
 
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
@@ -102,7 +117,11 @@ export default function App() {
   );
   const [editingContactId, setEditingContactId] = useState<string | null>(null);
   const [contactForm, setContactForm] = useState<ContactDraft>(emptyContact);
+
   const [contactSearch, setContactSearch] = useState("");
+  const [contactTypeFilter, setContactTypeFilter] =
+    useState<ContactTypeFilter>("all");
+  const [contactSort, setContactSort] = useState<ContactSort>("last_name");
 
   const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -112,8 +131,12 @@ export default function App() {
   }, []);
 
   const filteredCampaigns = useMemo(() => {
+    if (campaignFilter === "all") {
+      return campaigns;
+    }
+
     return campaigns.filter((campaign) => {
-      const status = (campaign.campaign_status || "draft") as CampaignFilter;
+      const status = (campaign.campaign_status || "draft") as CampaignStatus;
       return status === campaignFilter;
     });
   }, [campaigns, campaignFilter]);
@@ -121,22 +144,61 @@ export default function App() {
   const filteredContacts = useMemo(() => {
     const search = contactSearch.trim().toLowerCase();
 
-    if (!search) return contacts;
+    const results = contacts.filter((contact) => {
+      const matchesSearch = !search
+        ? true
+        : [
+            contact.first_name,
+            contact.last_name,
+            contact.email,
+            contact.phone_raw,
+            contact.phone_e164,
+            contact.contact_type,
+          ]
+            .join(" ")
+            .toLowerCase()
+            .includes(search);
 
-    return contacts.filter((contact) => {
-      const haystack = [
-        contact.first_name,
-        contact.last_name,
-        contact.email,
-        contact.phone_raw,
-        contact.phone_e164,
-      ]
-        .join(" ")
-        .toLowerCase();
+      const matchesType =
+        contactTypeFilter === "all"
+          ? true
+          : (contact.contact_type || "other") === contactTypeFilter;
 
-      return haystack.includes(search);
+      return matchesSearch && matchesType;
     });
-  }, [contacts, contactSearch]);
+
+    return [...results].sort((a, b) => {
+      if (contactSort === "last_name") {
+        return `${a.last_name || ""} ${a.first_name || ""}`.localeCompare(
+          `${b.last_name || ""} ${b.first_name || ""}`
+        );
+      }
+
+      if (contactSort === "first_name") {
+        return `${a.first_name || ""} ${a.last_name || ""}`.localeCompare(
+          `${b.first_name || ""} ${b.last_name || ""}`
+        );
+      }
+
+      if (contactSort === "email") {
+        return `${a.email || ""}`.localeCompare(`${b.email || ""}`);
+      }
+
+      if (contactSort === "phone") {
+        return `${a.phone_e164 || a.phone_raw || ""}`.localeCompare(
+          `${b.phone_e164 || b.phone_raw || ""}`
+        );
+      }
+
+      if (contactSort === "type") {
+        return `${a.contact_type || "other"}`.localeCompare(
+          `${b.contact_type || "other"}`
+        );
+      }
+
+      return 0;
+    });
+  }, [contacts, contactSearch, contactTypeFilter, contactSort]);
 
   async function loadAll() {
     const [campaignResult, contactResult] = await Promise.all([
@@ -144,10 +206,9 @@ export default function App() {
         .from("sms_campaigns")
         .select("*")
         .order("created_at", { ascending: false }),
-      supabase
-        .from("contacts")
-        .select("*")
-        .order("last_name", { ascending: true }),
+      supabase.from("contacts").select("*").order("last_name", {
+        ascending: true,
+      }),
     ]);
 
     if (campaignResult.data) {
@@ -193,7 +254,7 @@ export default function App() {
     return rawPhone;
   }
 
-  function openCampaigns(filter: CampaignFilter = "draft") {
+  function openCampaigns(filter: CampaignFilter = "all") {
     setCampaignFilter(filter);
     setView("campaigns");
   }
@@ -218,7 +279,7 @@ export default function App() {
       campaignForm.message_body !== (original.message_body || "") ||
       campaignForm.media_url !== (original.media_url || "") ||
       campaignForm.campaign_status !==
-        ((original.campaign_status || "draft") as CampaignFilter)
+        ((original.campaign_status || "draft") as CampaignStatus)
     );
   }
 
@@ -243,7 +304,10 @@ export default function App() {
     setEditingCampaignId(null);
     setCampaignForm({
       ...emptyCampaign,
-      campaign_status: campaignFilter === "archived" ? "draft" : campaignFilter,
+      campaign_status:
+        campaignFilter === "all" || campaignFilter === "archived"
+          ? "draft"
+          : campaignFilter,
     });
   }
 
@@ -258,7 +322,7 @@ export default function App() {
       campaign_name: campaign.campaign_name || "",
       message_body: campaign.message_body || "",
       media_url: campaign.media_url || "",
-      campaign_status: (campaign.campaign_status || "draft") as CampaignFilter,
+      campaign_status: (campaign.campaign_status || "draft") as CampaignStatus,
     });
   }
 
@@ -324,7 +388,7 @@ export default function App() {
 
   async function updateCampaignStatus(
     campaign: Campaign,
-    status: CampaignFilter
+    status: CampaignStatus
   ) {
     const { error } = await supabase
       .from("sms_campaigns")
@@ -391,8 +455,7 @@ export default function App() {
         contactForm.first_name.trim() !== "" ||
         contactForm.last_name.trim() !== "" ||
         contactForm.email.trim() !== "" ||
-        contactForm.phone_raw.trim() !== "" ||
-        contactForm.phone_e164.trim() !== ""
+        contactForm.phone_raw.trim() !== ""
       );
     }
 
@@ -404,11 +467,12 @@ export default function App() {
       contactForm.first_name !== (original.first_name || "") ||
       contactForm.last_name !== (original.last_name || "") ||
       contactForm.email !== (original.email || "") ||
-      contactForm.phone_raw !== (original.phone_raw || "") ||
-      contactForm.phone_e164 !== (original.phone_e164 || "") ||
+      contactForm.phone_raw !==
+        (original.phone_raw || original.phone_e164 || "") ||
       contactForm.sms_opt_in !== original.sms_opt_in ||
       contactForm.sms_opt_out !== original.sms_opt_out ||
-      contactForm.is_staff !== Boolean(original.is_staff)
+      contactForm.is_staff !== Boolean(original.is_staff) ||
+      contactForm.contact_type !== (original.contact_type || "other")
     );
   }
 
@@ -445,18 +509,16 @@ export default function App() {
       first_name: contact.first_name || "",
       last_name: contact.last_name || "",
       email: contact.email || "",
-      phone_raw: contact.phone_raw || "",
-      phone_e164: contact.phone_e164 || "",
+      phone_raw: contact.phone_raw || contact.phone_e164 || "",
       sms_opt_in: Boolean(contact.sms_opt_in),
       sms_opt_out: Boolean(contact.sms_opt_out),
       is_staff: Boolean(contact.is_staff),
+      contact_type: contact.contact_type || "other",
     });
   }
 
   async function saveContact() {
-    const formattedPhone =
-      contactForm.phone_e164.trim() ||
-      normalizePhone(contactForm.phone_raw.trim());
+    const formattedPhone = normalizePhone(contactForm.phone_raw.trim());
 
     if (!formattedPhone.trim()) {
       showNotice("A phone number is required.");
@@ -474,6 +536,7 @@ export default function App() {
       sms_opt_in: contactForm.sms_opt_in,
       sms_opt_out: contactForm.sms_opt_out,
       is_staff: contactForm.is_staff,
+      contact_type: contactForm.contact_type,
       sms_opt_in_date: contactForm.sms_opt_in ? new Date().toISOString() : null,
       sms_opt_out_date: contactForm.sms_opt_out
         ? new Date().toISOString()
@@ -549,6 +612,7 @@ export default function App() {
       "sms_opt_in",
       "sms_opt_out",
       "is_staff",
+      "contact_type",
     ];
 
     const rows = contacts.map((contact) =>
@@ -626,6 +690,12 @@ export default function App() {
       const smsOptIn =
         record.sms_opt_in?.toLowerCase() === "false" ? false : !smsOptOut;
 
+      const incomingType = record.contact_type?.toLowerCase();
+      const contactType: ContactType =
+        incomingType === "donor" || incomingType === "patron"
+          ? incomingType
+          : "other";
+
       return {
         first_name: record.first_name || null,
         last_name: record.last_name || null,
@@ -635,6 +705,7 @@ export default function App() {
         sms_opt_in: smsOptIn,
         sms_opt_out: smsOptOut,
         is_staff: record.is_staff?.toLowerCase() === "true",
+        contact_type: contactType,
       };
     });
 
@@ -738,7 +809,10 @@ export default function App() {
                   />
                 </label>
 
-                <button className="cstc-btn-secondary" onClick={exportContactsCsv}>
+                <button
+                  className="cstc-btn-secondary"
+                  onClick={exportContactsCsv}
+                >
                   Export CSV
                 </button>
 
@@ -757,11 +831,11 @@ export default function App() {
             <button
               className="cstc-card"
               style={{ ...styles.statCard, ...styles.tileButton }}
-              onClick={() => openCampaigns("draft")}
+              onClick={() => openCampaigns("all")}
             >
               <span className="cstc-overline">Campaigns</span>
               <div style={styles.statNumber}>{campaigns.length}</div>
-              <p style={styles.statCopy}>View campaign records</p>
+              <p style={styles.statCopy}>View all campaign records</p>
             </button>
 
             <button
@@ -862,11 +936,13 @@ export default function App() {
 
                     <select
                       className="cstc-select-compact"
-                      value={(campaign.campaign_status || "draft") as CampaignFilter}
+                      value={
+                        (campaign.campaign_status || "draft") as CampaignStatus
+                      }
                       onChange={(event) =>
                         updateCampaignStatus(
                           campaign,
-                          event.target.value as CampaignFilter
+                          event.target.value as CampaignStatus
                         )
                       }
                     >
@@ -942,13 +1018,46 @@ export default function App() {
                 </p>
               </div>
 
-              <input
-                className="cstc-input"
-                value={contactSearch}
-                onChange={(event) => setContactSearch(event.target.value)}
-                placeholder="Search contacts by name, email, or phone"
-                style={styles.searchInput}
-              />
+              <div style={styles.contactToolbar}>
+                <input
+                  className="cstc-input"
+                  value={contactSearch}
+                  onChange={(event) => setContactSearch(event.target.value)}
+                  placeholder="Search contacts"
+                />
+
+                <select
+                  className="cstc-select"
+                  value={contactTypeFilter}
+                  onChange={(event) =>
+                    setContactTypeFilter(
+                      event.target.value as ContactTypeFilter
+                    )
+                  }
+                >
+                  {contactTypeFilters.map((type) => (
+                    <option key={type} value={type}>
+                      {type === "all"
+                        ? "All Types"
+                        : type.charAt(0).toUpperCase() + type.slice(1)}
+                    </option>
+                  ))}
+                </select>
+
+                <select
+                  className="cstc-select"
+                  value={contactSort}
+                  onChange={(event) =>
+                    setContactSort(event.target.value as ContactSort)
+                  }
+                >
+                  <option value="last_name">Sort: Last Name</option>
+                  <option value="first_name">Sort: First Name</option>
+                  <option value="email">Sort: Email</option>
+                  <option value="phone">Sort: Phone</option>
+                  <option value="type">Sort: Type</option>
+                </select>
+              </div>
 
               <div className="cstc-card" style={styles.compactContactList}>
                 {filteredContacts.length === 0 && (
@@ -979,16 +1088,24 @@ export default function App() {
                       style={styles.compactContactButton}
                       onClick={() => startEditContact(contact)}
                     >
-                      <span style={styles.compactName}>{fullName(contact)}</span>
+                      <span style={styles.compactName}>
+                        {fullName(contact)}
+                      </span>
                       <span style={styles.compactMeta}>
                         {contact.phone_e164 || contact.phone_raw || "No phone"}
                         {contact.email ? ` · ${contact.email}` : ""}
                       </span>
                     </button>
 
-                    {contact.is_staff && (
-                      <span style={styles.staffTag}>Staff</span>
-                    )}
+                    <div style={styles.tagGroup}>
+                      <span style={styles.smallTag}>
+                        {contact.contact_type || "other"}
+                      </span>
+
+                      {contact.is_staff && (
+                        <span style={styles.smallTag}>Staff</span>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -1009,6 +1126,7 @@ export default function App() {
                 setForm={setContactForm}
                 onCancel={cancelContactEditor}
                 onSave={saveContact}
+                formattedPhonePreview={normalizePhone(contactForm.phone_raw)}
               />
             </div>
           </section>
@@ -1101,7 +1219,7 @@ function CampaignEditor({
         onChange={(event) =>
           setForm({
             ...form,
-            campaign_status: event.target.value as CampaignFilter,
+            campaign_status: event.target.value as CampaignStatus,
           })
         }
       >
@@ -1130,6 +1248,7 @@ type ContactEditorProps = {
   setForm: Dispatch<SetStateAction<ContactDraft>>;
   onCancel: () => void;
   onSave: () => void;
+  formattedPhonePreview: string;
 };
 
 function ContactEditor({
@@ -1139,6 +1258,7 @@ function ContactEditor({
   setForm,
   onCancel,
   onSave,
+  formattedPhonePreview,
 }: ContactEditorProps) {
   if (mode === "none") {
     return (
@@ -1226,15 +1346,27 @@ function ContactEditor({
         placeholder="(404) 555-1212"
       />
 
-      <label style={styles.fieldLabel}>Twilio Format</label>
-      <input
-        className="cstc-input"
-        value={form.phone_e164}
+      {form.phone_raw.trim() && (
+        <div style={styles.readOnlyPhonePreview}>
+          SMS formatted number: <strong>{formattedPhonePreview}</strong>
+        </div>
+      )}
+
+      <label style={styles.fieldLabel}>Contact Type</label>
+      <select
+        className="cstc-select"
+        value={form.contact_type}
         onChange={(event) =>
-          setForm({ ...form, phone_e164: event.target.value })
+          setForm({
+            ...form,
+            contact_type: event.target.value as ContactType,
+          })
         }
-        placeholder="+14045551212"
-      />
+      >
+        <option value="patron">Patron</option>
+        <option value="donor">Donor</option>
+        <option value="other">Other</option>
+      </select>
 
       <label style={styles.checkboxLabelLarge}>
         <input
@@ -1538,6 +1670,13 @@ const styles: Record<string, CSSProperties> = {
     paddingTop: 20,
   },
 
+  contactToolbar: {
+    display: "grid",
+    gap: 12,
+    gridTemplateColumns: "1fr 170px 190px",
+    marginBottom: 18,
+  },
+
   compactContactList: {
     overflow: "hidden",
   },
@@ -1581,7 +1720,12 @@ const styles: Record<string, CSSProperties> = {
     lineHeight: "18px",
   },
 
-  staffTag: {
+  tagGroup: {
+    display: "flex",
+    gap: 6,
+  },
+
+  smallTag: {
     background: "var(--cstc-light-bg)",
     border: "1px solid var(--cstc-border)",
     color: "var(--cstc-cobalt)",
@@ -1610,8 +1754,15 @@ const styles: Record<string, CSSProperties> = {
     gridTemplateColumns: "1fr 1fr",
   },
 
-  searchInput: {
-    marginBottom: 18,
+  readOnlyPhonePreview: {
+    background: "var(--cstc-light-bg)",
+    border: "1px solid var(--cstc-border)",
+    borderRadius: 5,
+    color: "var(--cstc-cobalt)",
+    fontSize: 13,
+    lineHeight: "20px",
+    marginTop: 10,
+    padding: "10px 12px",
   },
 
   fileButton: {
