@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { supabase } from "./lib/supabase";
+import "./styles/brand.css";
 
 type View = "dashboard" | "campaigns" | "contacts";
 
@@ -39,15 +40,11 @@ export default function App() {
     if (error) alert(error.message);
   }
 
-  function handleSelectCampaign(campaign: any) {
+  function openEditor(campaign: any) {
     if (editingCampaign && editingCampaign.id !== campaign.id) {
-      const confirmSwitch = window.confirm(
-        "You are editing a campaign. Cancel changes and switch?"
-      );
-
-      if (!confirmSwitch) return;
+      const ok = window.confirm("Discard current edits and switch campaign?");
+      if (!ok) return;
     }
-
     setEditingCampaign(campaign);
   }
 
@@ -71,12 +68,12 @@ export default function App() {
 
       {/* MAIN */}
       <div style={styles.main}>
-        {/* TOP BAR */}
+        {/* HEADER */}
         <div style={styles.topbar}>
-          <h2 style={styles.title}>
+          <h2 className="page-title">
             {view === "dashboard" && "Overview"}
-            {view === "campaigns" && "SMS Campaigns"}
-            {view === "contacts" && "Contact Database"}
+            {view === "campaigns" && "Campaigns"}
+            {view === "contacts" && "Contacts"}
           </h2>
 
           {loading && <div style={styles.badge}>Sending…</div>}
@@ -106,10 +103,10 @@ export default function App() {
               {campaigns.map((c) => (
                 <div key={c.id} style={styles.listCard}>
                   <div style={{ fontWeight: 600 }}>{c.campaign_name}</div>
-                  <div style={styles.muted}>{c.campaign_status}</div>
+                  <div className="muted">{c.campaign_status}</div>
 
                   <div style={styles.row}>
-                    <button style={styles.btn} onClick={() => handleSelectCampaign(c)}>
+                    <button style={styles.btn} onClick={() => openEditor(c)}>
                       Edit
                     </button>
                     <button style={styles.primary} onClick={() => sendCampaign(c.id)}>
@@ -121,7 +118,7 @@ export default function App() {
             </div>
 
             <div>
-              <h3>Campaign Editor</h3>
+              <h3>Editor</h3>
 
               {editingCampaign ? (
                 <CampaignEditor
@@ -130,9 +127,7 @@ export default function App() {
                   onSaved={loadAll}
                 />
               ) : (
-                <div style={styles.card}>
-                  Select a campaign to edit
-                </div>
+                <div style={styles.card}>Select a campaign</div>
               )}
             </div>
           </div>
@@ -148,17 +143,12 @@ export default function App() {
                 <div key={c.id} style={styles.listCard}>
                   <div style={{ fontWeight: 600 }}>{c.name || "No Name"}</div>
                   <div>{c.phone_e164}</div>
-                  <div style={styles.muted}>{c.email || "No email"}</div>
-                  <div style={styles.muted}>
+                  <div className="muted">{c.email || "No Email"}</div>
+                  <div className="muted">
                     {c.sms_opt_in ? "Opted In" : "Opted Out"}
                   </div>
                 </div>
               ))}
-            </div>
-
-            <div>
-              <h3>Add Contact</h3>
-              <ContactForm onSaved={loadAll} />
             </div>
           </div>
         )}
@@ -167,7 +157,7 @@ export default function App() {
   );
 }
 
-/* ---------------- CAMPAIGN EDITOR ---------------- */
+/* ---------------- EDITOR ---------------- */
 
 function CampaignEditor({ campaign, onClose, onSaved }: any) {
   const [form, setForm] = useState(campaign);
@@ -188,30 +178,18 @@ function CampaignEditor({ campaign, onClose, onSaved }: any) {
 
   return (
     <div style={styles.card}>
-      {/* HEADER (NEW) */}
-      <div style={styles.editorHeader}>
-        Editing: {form.campaign_name}
-      </div>
+      <div style={styles.editorHeader}>Editing Campaign</div>
 
       <input
         style={styles.input}
         value={form.campaign_name}
         onChange={(e) => setForm({ ...form, campaign_name: e.target.value })}
-        placeholder="Campaign Name"
       />
 
       <textarea
         style={styles.textarea}
         value={form.message_body}
         onChange={(e) => setForm({ ...form, message_body: e.target.value })}
-        placeholder="Message"
-      />
-
-      <input
-        style={styles.input}
-        value={form.media_url || ""}
-        onChange={(e) => setForm({ ...form, media_url: e.target.value })}
-        placeholder="Media URL"
       />
 
       <div style={styles.row}>
@@ -219,73 +197,9 @@ function CampaignEditor({ campaign, onClose, onSaved }: any) {
           Cancel
         </button>
         <button style={styles.primary} onClick={save}>
-          Save Changes
+          Save
         </button>
       </div>
-    </div>
-  );
-}
-
-/* ---------------- CONTACT FORM ---------------- */
-
-function ContactForm({ onSaved }: any) {
-  const [form, setForm] = useState({
-    name: "",
-    phone_e164: "",
-    email: "",
-    sms_opt_in: true,
-  });
-
-  async function save() {
-    await supabase.from("contacts").insert({
-      name: form.name,
-      phone_e164: form.phone_e164,
-      email: form.email,
-      sms_opt_in: form.sms_opt_in,
-      sms_opt_out: !form.sms_opt_in,
-    });
-
-    setForm({ name: "", phone_e164: "", email: "", sms_opt_in: true });
-    onSaved();
-  }
-
-  return (
-    <div style={styles.card}>
-      <input
-        style={styles.input}
-        placeholder="Name"
-        value={form.name}
-        onChange={(e) => setForm({ ...form, name: e.target.value })}
-      />
-
-      <input
-        style={styles.input}
-        placeholder="Phone"
-        value={form.phone_e164}
-        onChange={(e) => setForm({ ...form, phone_e164: e.target.value })}
-      />
-
-      <input
-        style={styles.input}
-        placeholder="Email"
-        value={form.email}
-        onChange={(e) => setForm({ ...form, email: e.target.value })}
-      />
-
-      <label style={{ display: "flex", gap: 8, marginBottom: 10 }}>
-        <input
-          type="checkbox"
-          checked={form.sms_opt_in}
-          onChange={(e) =>
-            setForm({ ...form, sms_opt_in: e.target.checked })
-          }
-        />
-        SMS Opt-in
-      </label>
-
-      <button style={styles.primary} onClick={save}>
-        Add Contact
-      </button>
     </div>
   );
 }
@@ -296,7 +210,7 @@ const styles: any = {
   shell: {
     display: "flex",
     height: "100vh",
-    fontFamily: "system-ui, Arial",
+    fontFamily: "Roboto, Arial",
     background: "#f5f6f8",
   },
 
@@ -308,24 +222,15 @@ const styles: any = {
   },
 
   brand: {
-    fontSize: 18,
+    fontFamily: "Poppins",
     fontWeight: 700,
+    fontSize: 16,
   },
 
   subbrand: {
-    fontSize: 12,
+    fontSize: 11,
     opacity: 0.6,
     marginBottom: 20,
-  },
-
-  navBtn: {
-    width: "100%",
-    padding: 10,
-    marginBottom: 8,
-    background: "transparent",
-    border: "1px solid #333",
-    color: "#fff",
-    cursor: "pointer",
   },
 
   main: {
@@ -339,15 +244,11 @@ const styles: any = {
     marginBottom: 20,
   },
 
-  title: {
-    margin: 0,
-  },
-
   badge: {
-    padding: "4px 8px",
     background: "#000",
     color: "#fff",
     fontSize: 12,
+    padding: "4px 8px",
   },
 
   grid: {
@@ -378,18 +279,14 @@ const styles: any = {
   },
 
   editorHeader: {
-    fontWeight: 700,
+    fontFamily: "Poppins",
+    fontWeight: 600,
     marginBottom: 10,
   },
 
   stat: {
     fontSize: 28,
     fontWeight: 700,
-  },
-
-  muted: {
-    fontSize: 12,
-    opacity: 0.6,
   },
 
   row: {
@@ -402,15 +299,13 @@ const styles: any = {
     padding: "6px 10px",
     border: "1px solid #ccc",
     background: "#fff",
-    cursor: "pointer",
   },
 
   primary: {
     padding: "6px 10px",
-    border: "1px solid #000",
     background: "#000",
     color: "#fff",
-    cursor: "pointer",
+    border: "1px solid #000",
   },
 
   input: {
@@ -423,6 +318,5 @@ const styles: any = {
     width: "100%",
     padding: 8,
     height: 100,
-    marginBottom: 10,
   },
 };

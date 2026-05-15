@@ -1,0 +1,102 @@
+/* -----------------------------
+   CITY SPRINGS BRAND SYSTEM
+------------------------------ */
+
+/* Poppins */
+@font-face {
+  font-display: swap;
+  font-family: Poppins;
+  font-style: normal;
+  font-weight: 400;
+  src: url("/fonts/poppins-v23-latin-regular.woff2") format("woff2");
+}
+
+@font-face {
+  font-display: swap;
+  font-family: Poppins;
+  font-style: normal;
+  font-weight: 600;
+  src: url("/fonts/poppins-v23-latin-600.woff2") format("woff2");
+}
+
+@font-face {
+  font-display: swap;
+  font-family: Poppins;
+  font-style: normal;
+  font-weight: 700;
+  src: url("/fonts/poppins-v23-latin-700.woff2") format("woff2");
+}
+
+@font-face {
+  font-display: swap;
+  font-family: Poppins;
+  font-style: normal;
+  font-weight: 800;
+  src: url("/fonts/poppins-v23-latin-800.woff2") format("woff2");
+}
+
+/* Roboto */
+@font-face {
+  font-display: swap;
+  font-family: Roboto;
+  font-style: normal;
+  font-weight: 400;
+  src: url("/fonts/roboto-v47-latin-regular.woff2") format("woff2");
+}
+
+@font-face {
+  font-display: swap;
+  font-family: Roboto;
+  font-style: normal;
+  font-weight: 500;
+  src: url("/fonts/roboto-v47-latin-500.woff2") format("woff2");
+}
+
+@font-face {
+  font-display: swap;
+  font-family: Roboto;
+  font-style: normal;
+  font-weight: 600;
+  src: url("/fonts/roboto-v47-latin-600.woff2") format("woff2");
+}
+
+/* -----------------------------
+   BASE SYSTEM
+------------------------------ */
+
+body {
+  margin: 0;
+  font-family: Roboto, Arial, sans-serif;
+  font-size: 17px;
+  line-height: 30px;
+  color: #585858;
+  background: #f5f6f8;
+}
+
+img {
+  max-width: 100%;
+}
+
+/* Headings */
+h1, h2, h3, h4 {
+  font-family: Poppins, Arial, sans-serif;
+  font-weight: 600;
+  color: #111;
+  margin: 0 0 10px 0;
+}
+
+/* Buttons */
+button {
+  font-family: Poppins, Arial, sans-serif;
+}
+
+/* Utility */
+.page-title {
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.muted {
+  opacity: 0.6;
+  font-size: 13px;
+}
