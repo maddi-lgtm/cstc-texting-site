@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   ChangeEvent,
   CSSProperties,
@@ -21,9 +21,17 @@ type CampaignFilter = "all" | "draft" | "ready" | "sent" | "archived";
 type CampaignStatus = "draft" | "ready" | "sent" | "archived";
 type Audience = "staff" | "all";
 
-type ContactTypeFilter = "all" | "donor" | "patron" | "other";
 type ContactType = "donor" | "patron" | "other";
-type ContactSort = "last_name" | "first_name" | "email" | "phone" | "type";
+type ContactSort = "last_name" | "first_name" | "email" | "phone" | "group";
+
+type ConfirmModalState = {
+  title: string;
+  message: string;
+  confirmText?: string;
+  cancelText?: string;
+  requireText?: string;
+  danger?: boolean;
+} | null;
 
 type Campaign = {
   id: string;
@@ -113,8 +121,6 @@ type ContactDraft = {
   phone_raw: string;
   sms_opt_in: boolean;
   sms_opt_out: boolean;
-  is_staff: boolean;
-  contact_type: ContactType;
   sms_opt_in_source: string;
 };
 
@@ -126,8 +132,8 @@ type ImportRow = {
   phone_e164: string | null;
   sms_opt_in: boolean;
   sms_opt_out: boolean;
-  is_staff: boolean;
-  contact_type: ContactType;
+  audience_groups: string[];
+  sms_opt_in_source: string;
   duplicate_reason?: string;
   valid: boolean;
 };
@@ -146,8 +152,6 @@ const emptyContact: ContactDraft = {
   phone_raw: "",
   sms_opt_in: true,
   sms_opt_out: false,
-  is_staff: false,
-  contact_type: "other",
   sms_opt_in_source: "manual",
 };
 
@@ -157,13 +161,6 @@ const campaignFilters: CampaignFilter[] = [
   "ready",
   "sent",
   "archived",
-];
-
-const contactTypeFilters: ContactTypeFilter[] = [
-  "all",
-  "donor",
-  "patron",
-  "other",
 ];
 
 export default function App() {
@@ -196,8 +193,7 @@ export default function App() {
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
 
   const [contactSearch, setContactSearch] = useState("");
-  const [contactTypeFilter, setContactTypeFilter] =
-    useState<ContactTypeFilter>("all");
+  const [contactGroupFilter, setContactGroupFilter] = useState<string>("all");
   const [contactSort, setContactSort] = useState<ContactSort>("last_name");
 
   const [newTagName, setNewTagName] = useState("");
@@ -205,6 +201,10 @@ export default function App() {
 
   const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+
+  const [confirmModal, setConfirmModal] = useState<ConfirmModalState>(null);
+  const [confirmModalInput, setConfirmModalInput] = useState("");
+  const confirmResolverRef = useRef<((value: boolean) => void) | null>(null);
 
   useEffect(() => {
     loadAll();
@@ -223,9 +223,8 @@ export default function App() {
     const search = contactSearch.trim().toLowerCase();
 
     const results = contacts.filter((contact) => {
-      const contactTags = tagsForContact(contact.id)
-        .map((tag) => tag.tag_name)
-        .join(" ");
+      const contactTags = tagsForContact(contact.id);
+      const contactTagNames = contactTags.map((tag) => tag.tag_name).join(" ");
 
       const matchesSearch = !search
         ? true
@@ -235,19 +234,18 @@ export default function App() {
             contact.email,
             contact.phone_raw,
             contact.phone_e164,
-            contact.contact_type,
-            contactTags,
+            contactTagNames,
           ]
             .join(" ")
             .toLowerCase()
             .includes(search);
 
-      const matchesType =
-        contactTypeFilter === "all"
+      const matchesGroup =
+        contactGroupFilter === "all"
           ? true
-          : (contact.contact_type || "other") === contactTypeFilter;
+          : contactTags.some((tag) => tag.id === contactGroupFilter);
 
-      return matchesSearch && matchesType;
+      return matchesSearch && matchesGroup;
     });
 
     return [...results].sort((a, b) => {
@@ -273,10 +271,10 @@ export default function App() {
         );
       }
 
-      if (contactSort === "type") {
-        return `${a.contact_type || "other"}`.localeCompare(
-          `${b.contact_type || "other"}`
-        );
+      if (contactSort === "group") {
+        const aGroup = tagsForContact(a.id)[0]?.tag_name || "";
+        const bGroup = tagsForContact(b.id)[0]?.tag_name || "";
+        return aGroup.localeCompare(bGroup);
       }
 
       return 0;
@@ -284,7 +282,7 @@ export default function App() {
   }, [
     contacts,
     contactSearch,
-    contactTypeFilter,
+    contactGroupFilter,
     contactSort,
     tagMembers,
     tags,
@@ -369,6 +367,22 @@ export default function App() {
     window.setTimeout(() => setNotice(null), 5000);
   }
 
+  function requestConfirmation(options: NonNullable<ConfirmModalState>) {
+    setConfirmModalInput("");
+    setConfirmModal(options);
+
+    return new Promise<boolean>((resolve) => {
+      confirmResolverRef.current = resolve;
+    });
+  }
+
+  function closeConfirmModal(result: boolean) {
+    confirmResolverRef.current?.(result);
+    confirmResolverRef.current = null;
+    setConfirmModal(null);
+    setConfirmModalInput("");
+  }
+
   function navButtonStyle(active: boolean): CSSProperties {
     return {
       ...styles.navBtn,
@@ -415,8 +429,13 @@ export default function App() {
     return contacts.filter((contact) => {
       const eligible =
         contact.sms_opt_in && !contact.sms_opt_out && Boolean(contact.phone_e164);
+
       if (!eligible) return false;
-      if (audience === "staff") return Boolean(contact.is_staff);
+
+      if (audience === "staff") {
+        return tagsForContact(contact.id).some((tag) => tag.tag_name === "Staff");
+      }
+
       return true;
     }).length;
   }
@@ -449,11 +468,16 @@ export default function App() {
     );
   }
 
-  function confirmDiscardCampaignEdits() {
+  async function confirmDiscardCampaignEdits() {
     if (!isCampaignDirty()) return true;
-    return window.confirm(
-      "You have unsaved campaign changes. Discard them and continue?"
-    );
+
+    return requestConfirmation({
+      title: "Discard Campaign Changes?",
+      message: "You have unsaved campaign changes. Discard them and continue?",
+      confirmText: "Discard Changes",
+      cancelText: "Keep Editing",
+      danger: true,
+    });
   }
 
   function cancelCampaignEditor() {
@@ -462,8 +486,8 @@ export default function App() {
     setCampaignForm(emptyCampaign);
   }
 
-  function startNewCampaign() {
-    if (!confirmDiscardCampaignEdits()) return;
+  async function startNewCampaign() {
+    if (!(await confirmDiscardCampaignEdits())) return;
 
     setCampaignMode("create");
     setEditingCampaignId(null);
@@ -476,8 +500,11 @@ export default function App() {
     });
   }
 
-  function startEditCampaign(campaign: Campaign) {
-    if (editingCampaignId !== campaign.id && !confirmDiscardCampaignEdits()) {
+  async function startEditCampaign(campaign: Campaign) {
+    if (
+      editingCampaignId !== campaign.id &&
+      !(await confirmDiscardCampaignEdits())
+    ) {
       return;
     }
 
@@ -598,17 +625,27 @@ export default function App() {
     const count = getAudienceCount(audience);
 
     if (audience === "staff") {
-      const ok = window.confirm(
-        `Send test "${campaign.campaign_name}" to ${count} staff contact(s)?`
-      );
+      const ok = await requestConfirmation({
+        title: "Send Staff Test?",
+        message: `Send test "${campaign.campaign_name}" to ${count} Staff audience group contact(s)?`,
+        confirmText: "Send Test",
+        cancelText: "Cancel",
+      });
+
       if (!ok) return;
     }
 
     if (audience === "all") {
-      const typed = window.prompt(
-        `Send "${campaign.campaign_name}" to ${count} opted-in contact(s)?\n\nType SEND to confirm.`
-      );
-      if (typed !== "SEND") {
+      const ok = await requestConfirmation({
+        title: "Send Campaign?",
+        message: `This will send "${campaign.campaign_name}" to ${count} opted-in contact(s). Type SEND to confirm.`,
+        confirmText: "Send Campaign",
+        cancelText: "Cancel",
+        requireText: "SEND",
+        danger: true,
+      });
+
+      if (!ok) {
         showNotice("Send cancelled.");
         return;
       }
@@ -656,19 +693,23 @@ export default function App() {
       contactForm.first_name !== (original.first_name || "") ||
       contactForm.last_name !== (original.last_name || "") ||
       contactForm.email !== (original.email || "") ||
-      contactForm.phone_raw !== (original.phone_raw || original.phone_e164 || "") ||
+      contactForm.phone_raw !==
+        (original.phone_raw || original.phone_e164 || "") ||
       contactForm.sms_opt_in !== original.sms_opt_in ||
-      contactForm.sms_opt_out !== original.sms_opt_out ||
-      contactForm.is_staff !== Boolean(original.is_staff) ||
-      contactForm.contact_type !== (original.contact_type || "other")
+      contactForm.sms_opt_out !== original.sms_opt_out
     );
   }
 
-  function confirmDiscardContactEdits() {
+  async function confirmDiscardContactEdits() {
     if (!isContactDirty()) return true;
-    return window.confirm(
-      "You have unsaved contact changes. Discard them and continue?"
-    );
+
+    return requestConfirmation({
+      title: "Discard Contact Changes?",
+      message: "You have unsaved contact changes. Discard them and continue?",
+      confirmText: "Discard Changes",
+      cancelText: "Keep Editing",
+      danger: true,
+    });
   }
 
   function cancelContactEditor() {
@@ -678,8 +719,8 @@ export default function App() {
     setSelectedTagIds([]);
   }
 
-  function startNewContact() {
-    if (!confirmDiscardContactEdits()) return;
+  async function startNewContact() {
+    if (!(await confirmDiscardContactEdits())) return;
 
     setContactMode("create");
     setEditingContactId(null);
@@ -687,8 +728,11 @@ export default function App() {
     setSelectedTagIds([]);
   }
 
-  function startEditContact(contact: Contact) {
-    if (editingContactId !== contact.id && !confirmDiscardContactEdits()) {
+  async function startEditContact(contact: Contact) {
+    if (
+      editingContactId !== contact.id &&
+      !(await confirmDiscardContactEdits())
+    ) {
       return;
     }
 
@@ -701,8 +745,6 @@ export default function App() {
       phone_raw: contact.phone_raw || contact.phone_e164 || "",
       sms_opt_in: Boolean(contact.sms_opt_in),
       sms_opt_out: Boolean(contact.sms_opt_out),
-      is_staff: Boolean(contact.is_staff),
-      contact_type: contact.contact_type || "other",
       sms_opt_in_source: contact.sms_opt_in_source || "manual",
     });
 
@@ -752,7 +794,9 @@ export default function App() {
 
     if (duplicate) {
       showNotice(
-        `Duplicate detected: ${fullName(duplicate as Contact)} already has that phone or email.`
+        `Duplicate detected: ${fullName(
+          duplicate as Contact
+        )} already has that phone or email.`
       );
       return;
     }
@@ -767,8 +811,6 @@ export default function App() {
       phone_e164: formattedPhone,
       sms_opt_in: contactForm.sms_opt_in,
       sms_opt_out: contactForm.sms_opt_out,
-      is_staff: contactForm.is_staff,
-      contact_type: contactForm.contact_type,
       sms_opt_in_source: contactForm.sms_opt_in_source || "manual",
       sms_opt_in_date: contactForm.sms_opt_in ? new Date().toISOString() : null,
       sms_opt_out_date: contactForm.sms_opt_out
@@ -815,7 +857,10 @@ export default function App() {
   }
 
   async function saveContactTags(contactId: string) {
-    await supabase.from("contact_tag_members").delete().eq("contact_id", contactId);
+    await supabase
+      .from("contact_tag_members")
+      .delete()
+      .eq("contact_id", contactId);
 
     if (selectedTagIds.length > 0) {
       await supabase.from("contact_tag_members").insert(
@@ -888,22 +933,38 @@ export default function App() {
       "phone_e164",
       "sms_opt_in",
       "sms_opt_out",
-      "is_staff",
-      "contact_type",
+      "audience_groups",
       "sms_opt_in_source",
       "sms_opt_in_date",
       "sms_opt_out_date",
       "last_sms_sent_at",
     ];
 
-    const rows = contacts.map((contact) =>
-      headers.map((key) => {
-        const value = String(
-          (contact as unknown as Record<string, unknown>)[key] ?? ""
-        );
+    const rows = contacts.map((contact) => {
+      const audienceGroups = tagsForContact(contact.id)
+        .map((tag) => tag.tag_name)
+        .join(";");
+
+      const values: Record<string, unknown> = {
+        first_name: contact.first_name,
+        last_name: contact.last_name,
+        email: contact.email,
+        phone_raw: contact.phone_raw,
+        phone_e164: contact.phone_e164,
+        sms_opt_in: contact.sms_opt_in,
+        sms_opt_out: contact.sms_opt_out,
+        audience_groups: audienceGroups,
+        sms_opt_in_source: contact.sms_opt_in_source,
+        sms_opt_in_date: contact.sms_opt_in_date,
+        sms_opt_out_date: contact.sms_opt_out_date,
+        last_sms_sent_at: contact.last_sms_sent_at,
+      };
+
+      return headers.map((key) => {
+        const value = String(values[key] ?? "");
         return `"${value.replace(/"/g, '""')}"`;
-      })
-    );
+      });
+    });
 
     const csv = [headers.join(","), ...rows.map((row) => row.join(","))].join(
       "\n"
@@ -946,6 +1007,13 @@ export default function App() {
     return values;
   }
 
+  function parseAudienceGroups(value: string) {
+    return value
+      .split(";")
+      .map((group) => group.trim())
+      .filter(Boolean);
+  }
+
   async function previewContactsCsv(file: File) {
     const text = await file.text();
     const lines = text.split(/\r?\n/).filter((line) => line.trim());
@@ -967,15 +1035,12 @@ export default function App() {
 
       const phoneRaw = record.phone_raw || record.phone || "";
       const phoneE164 = record.phone_e164 || normalizePhone(phoneRaw);
+
       const smsOptOut = record.sms_opt_out?.toLowerCase() === "true";
       const smsOptIn =
         record.sms_opt_in?.toLowerCase() === "false" ? false : !smsOptOut;
 
-      const incomingType = record.contact_type?.toLowerCase();
-      const contactType: ContactType =
-        incomingType === "donor" || incomingType === "patron"
-          ? incomingType
-          : "other";
+      const audienceGroups = parseAudienceGroups(record.audience_groups || "");
 
       const duplicate = contacts.find((contact) => {
         const phoneMatch = phoneE164 && contact.phone_e164 === phoneE164;
@@ -997,8 +1062,8 @@ export default function App() {
         phone_e164: phoneE164,
         sms_opt_in: smsOptIn,
         sms_opt_out: smsOptOut,
-        is_staff: record.is_staff?.toLowerCase() === "true",
-        contact_type: contactType,
+        audience_groups: audienceGroups,
+        sms_opt_in_source: record.sms_opt_in_source || "csv_import",
         duplicate_reason: duplicate ? `Matches ${fullName(duplicate)}` : undefined,
         valid,
       };
@@ -1037,19 +1102,64 @@ export default function App() {
         phone_e164: row.phone_e164,
         sms_opt_in: row.sms_opt_in,
         sms_opt_out: row.sms_opt_out,
-        is_staff: row.is_staff,
-        contact_type: row.contact_type,
-        sms_opt_in_source: "csv_import",
+        sms_opt_in_source: row.sms_opt_in_source || "csv_import",
         sms_opt_in_date: row.sms_opt_in ? new Date().toISOString() : null,
         sms_opt_out_date: row.sms_opt_out ? new Date().toISOString() : null,
       };
 
+      let contactId: string | null = null;
+
       if (existing) {
         await supabase.from("contacts").update(payload).eq("id", existing.id);
+        contactId = existing.id;
         updated += 1;
       } else {
-        await supabase.from("contacts").insert(payload);
+        const { data } = await supabase
+          .from("contacts")
+          .insert(payload)
+          .select()
+          .single();
+
+        contactId = data?.id ?? null;
         created += 1;
+      }
+
+      if (contactId && row.audience_groups.length > 0) {
+        const tagIds: string[] = [];
+
+        for (const groupName of row.audience_groups) {
+          const existingTag = tags.find(
+            (tag) => tag.tag_name.toLowerCase() === groupName.toLowerCase()
+          );
+
+          if (existingTag) {
+            tagIds.push(existingTag.id);
+          } else {
+            const { data: newTag } = await supabase
+              .from("contact_tags")
+              .insert({ tag_name: groupName })
+              .select()
+              .single();
+
+            if (newTag?.id) {
+              tagIds.push(newTag.id);
+            }
+          }
+        }
+
+        if (tagIds.length > 0) {
+          await supabase
+            .from("contact_tag_members")
+            .delete()
+            .eq("contact_id", contactId);
+
+          await supabase.from("contact_tag_members").insert(
+            tagIds.map((tagId) => ({
+              contact_id: contactId,
+              tag_id: tagId,
+            }))
+          );
+        }
       }
     }
 
@@ -1059,6 +1169,7 @@ export default function App() {
       created,
       updated,
       invalid: importPreview.length - validRows.length,
+      csv_format: "audience_groups",
     });
 
     setImportPreview(null);
@@ -1399,18 +1510,13 @@ export default function App() {
 
                 <select
                   className="cstc-select"
-                  value={contactTypeFilter}
-                  onChange={(event) =>
-                    setContactTypeFilter(
-                      event.target.value as ContactTypeFilter
-                    )
-                  }
+                  value={contactGroupFilter}
+                  onChange={(event) => setContactGroupFilter(event.target.value)}
                 >
-                  {contactTypeFilters.map((type) => (
-                    <option key={type} value={type}>
-                      {type === "all"
-                        ? "All Types"
-                        : type.charAt(0).toUpperCase() + type.slice(1)}
+                  <option value="all">All Groups</option>
+                  {tags.map((tag) => (
+                    <option key={tag.id} value={tag.id}>
+                      {tag.tag_name}
                     </option>
                   ))}
                 </select>
@@ -1426,7 +1532,7 @@ export default function App() {
                   <option value="first_name">Sort: First Name</option>
                   <option value="email">Sort: Email</option>
                   <option value="phone">Sort: Phone</option>
-                  <option value="type">Sort: Type</option>
+                  <option value="group">Sort: Group</option>
                 </select>
               </div>
 
@@ -1477,19 +1583,11 @@ export default function App() {
                     </button>
 
                     <div style={styles.tagGroup}>
-                      <span style={styles.smallTag}>
-                        {contact.contact_type || "other"}
-                      </span>
-
-                      {tagsForContact(contact.id).slice(0, 2).map((tag) => (
+                      {tagsForContact(contact.id).slice(0, 3).map((tag) => (
                         <span key={tag.id} style={styles.smallTag}>
                           {tag.tag_name}
                         </span>
                       ))}
-
-                      {contact.is_staff && (
-                        <span style={styles.smallTag}>Staff</span>
-                      )}
                     </div>
                   </div>
                 ))}
@@ -1615,6 +1713,16 @@ export default function App() {
           />
         )}
       </main>
+
+      {confirmModal && (
+        <ConfirmModal
+          modal={confirmModal}
+          inputValue={confirmModalInput}
+          setInputValue={setConfirmModalInput}
+          onCancel={() => closeConfirmModal(false)}
+          onConfirm={() => closeConfirmModal(true)}
+        />
+      )}
     </div>
   );
 }
@@ -1849,22 +1957,6 @@ function ContactEditor({
         </div>
       )}
 
-      <label style={styles.fieldLabel}>Contact Type</label>
-      <select
-        className="cstc-select"
-        value={form.contact_type}
-        onChange={(event) =>
-          setForm({
-            ...form,
-            contact_type: event.target.value as ContactType,
-          })
-        }
-      >
-        <option value="patron">Patron</option>
-        <option value="donor">Donor</option>
-        <option value="other">Other</option>
-      </select>
-
       <label style={styles.fieldLabel}>Opt-In Source</label>
       <input
         className="cstc-input"
@@ -1900,18 +1992,6 @@ function ContactEditor({
         SMS Opt-In
       </label>
 
-      <label style={styles.checkboxLabelLarge}>
-        <input
-          className="cstc-checkbox"
-          type="checkbox"
-          checked={form.is_staff}
-          onChange={(event) =>
-            setForm({ ...form, is_staff: event.target.checked })
-          }
-        />
-        Staff Test Contact
-      </label>
-
       <div style={styles.editorActions}>
         <button className="cstc-btn-secondary" onClick={onCancel}>
           Cancel
@@ -1941,8 +2021,8 @@ function ImportPreview({
     <div className="cstc-card" style={styles.importPreview}>
       <span className="cstc-overline">CSV Import Preview</span>
       <p style={styles.sectionCopy}>
-        Rows: {rows.length} · Valid: {valid} · Duplicates/updates: {duplicates} ·
-        Invalid: {invalid}
+        Rows: {rows.length} · Valid: {valid} · Updates: {duplicates} · Invalid:{" "}
+        {invalid}
       </p>
 
       <div style={styles.editorActions}>
@@ -1998,6 +2078,64 @@ function LogTable({
         ))}
       </div>
     </section>
+  );
+}
+
+function ConfirmModal({
+  modal,
+  inputValue,
+  setInputValue,
+  onCancel,
+  onConfirm,
+}: {
+  modal: NonNullable<ConfirmModalState>;
+  inputValue: string;
+  setInputValue: Dispatch<SetStateAction<string>>;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const requiresText = Boolean(modal.requireText);
+  const canConfirm = !requiresText || inputValue === modal.requireText;
+
+  return (
+    <div style={styles.modalBackdrop}>
+      <div className="cstc-card" style={styles.modalCard}>
+        <span className="cstc-overline">Confirm Action</span>
+
+        <h2 className="cstc-section-title">{modal.title}</h2>
+
+        <p style={styles.modalMessage}>{modal.message}</p>
+
+        {modal.requireText && (
+          <div style={styles.modalInputBlock}>
+            <label style={styles.fieldLabel}>
+              Type {modal.requireText} to confirm
+            </label>
+            <input
+              className="cstc-input"
+              value={inputValue}
+              onChange={(event) => setInputValue(event.target.value)}
+              placeholder={modal.requireText}
+              autoFocus
+            />
+          </div>
+        )}
+
+        <div style={styles.modalActions}>
+          <button className="cstc-btn-secondary" onClick={onCancel}>
+            {modal.cancelText || "Cancel"}
+          </button>
+
+          <button
+            className={modal.danger ? "cstc-btn-danger" : "cstc-btn-primary"}
+            onClick={onConfirm}
+            disabled={!canConfirm}
+          >
+            {modal.confirmText || "Confirm"}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -2432,5 +2570,42 @@ const styles: Record<string, CSSProperties> = {
     fontSize: 12,
     lineHeight: "18px",
     overflowWrap: "anywhere",
+  },
+
+  modalBackdrop: {
+    alignItems: "center",
+    background: "rgba(4, 16, 92, 0.58)",
+    display: "flex",
+    inset: 0,
+    justifyContent: "center",
+    padding: 24,
+    position: "fixed",
+    zIndex: 1000,
+  },
+
+  modalCard: {
+    maxWidth: 520,
+    padding: 28,
+    width: "100%",
+  },
+
+  modalMessage: {
+    color: "var(--cstc-copy)",
+    fontSize: 16,
+    lineHeight: "25px",
+    margin: "14px 0 0",
+  },
+
+  modalInputBlock: {
+    marginTop: 18,
+  },
+
+  modalActions: {
+    borderTop: "1px solid var(--cstc-border)",
+    display: "flex",
+    gap: 10,
+    justifyContent: "flex-end",
+    marginTop: 24,
+    paddingTop: 20,
   },
 };
