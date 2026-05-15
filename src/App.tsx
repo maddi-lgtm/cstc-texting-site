@@ -6,6 +6,7 @@ import type {
   SetStateAction,
 } from "react";
 import { supabase } from "./lib/supabase";
+import cstcLogo from "./assets/cstc-logo.png";
 import "./styles/brand.css";
 
 type View =
@@ -1453,8 +1454,11 @@ export default function App() {
     <div style={styles.shell}>
       <aside style={styles.sidebar}>
         <div style={styles.logoBlock}>
-          <div style={styles.logoTop}>City Springs</div>
-          <div style={styles.logoBottom}>Theatre Company</div>
+          <img
+            src={cstcLogo}
+            alt="City Springs Theatre Company"
+            style={styles.sidebarLogo}
+          />
         </div>
 
         <nav style={styles.nav}>
@@ -2784,8 +2788,12 @@ const styles: Record<string, CSSProperties> = {
     color: "#fff",
     display: "flex",
     flexDirection: "column",
+    height: "100vh",
     minHeight: "100vh",
+    overflowY: "auto",
     padding: 24,
+    position: "sticky",
+    top: 0,
     width: 270,
   },
 
@@ -2795,24 +2803,11 @@ const styles: Record<string, CSSProperties> = {
     paddingBottom: 24,
   },
 
-  logoTop: {
-    color: "#fff",
-    fontFamily: "Poppins, Arial, sans-serif",
-    fontSize: 22,
-    fontWeight: 800,
-    letterSpacing: ".4px",
-    lineHeight: "26px",
-    textTransform: "uppercase",
-  },
-
-  logoBottom: {
-    color: "#9ab7ff",
-    fontFamily: "Poppins, Arial, sans-serif",
-    fontSize: 12,
-    fontWeight: 600,
-    letterSpacing: ".08em",
-    lineHeight: "18px",
-    textTransform: "uppercase",
+  sidebarLogo: {
+    display: "block",
+    height: "auto",
+    maxWidth: "100%",
+    width: 190,
   },
 
   nav: {
