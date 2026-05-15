@@ -209,6 +209,8 @@ export default function App() {
   const [confirmModalInput, setConfirmModalInput] = useState("");
   const confirmResolverRef = useRef<((value: boolean) => void) | null>(null);
 
+  const [auditDetail, setAuditDetail] = useState<AuditLog | null>(null);
+
   useEffect(() => {
     loadAll();
   }, []);
@@ -655,6 +657,11 @@ export default function App() {
   function openCampaigns(filter: CampaignFilter = "all") {
     setCampaignFilter(filter);
     setView("campaigns");
+  }
+
+  function openAudienceGroupContacts(tagId: string) {
+    setContactGroupFilter(tagId);
+    setView("contacts");
   }
 
   function isCampaignDirty() {
@@ -1958,7 +1965,12 @@ export default function App() {
 
             <div style={styles.segmentGrid}>
               {tags.map((tag) => (
-                <div key={tag.id} className="cstc-card" style={styles.statCard}>
+                <button
+                  key={tag.id}
+                  className="cstc-card"
+                  style={{ ...styles.statCard, ...styles.tileButton }}
+                  onClick={() => openAudienceGroupContacts(tag.id)}
+                >
                   <span className="cstc-overline">Audience Group</span>
                   <h3 style={styles.recordTitle}>{tag.tag_name}</h3>
                   <p style={styles.statCopy}>
@@ -1968,7 +1980,8 @@ export default function App() {
                     }{" "}
                     contact(s)
                   </p>
-                </div>
+                  <p style={styles.tileHint}>View contacts in this group</p>
+                </button>
               ))}
             </div>
           </section>
@@ -2014,17 +2027,7 @@ export default function App() {
         )}
 
         {view === "audit" && (
-          <LogTable
-            title="Audit Log"
-            rows={auditLogs.map((log) => ({
-              id: log.id,
-              primary: log.action,
-              secondary: log.actor || "dashboard",
-              detail: `${log.entity_type || ""} ${log.entity_id || ""}`,
-              date: log.created_at,
-              meta: JSON.stringify(log.details || {}),
-            }))}
-          />
+          <AuditLogTable logs={auditLogs} onOpenLog={setAuditDetail} />
         )}
       </main>
 
@@ -2035,6 +2038,13 @@ export default function App() {
           setInputValue={setConfirmModalInput}
           onCancel={() => closeConfirmModal(false)}
           onConfirm={() => closeConfirmModal(true)}
+        />
+      )}
+
+      {auditDetail && (
+        <AuditDetailModal
+          log={auditDetail}
+          onClose={() => setAuditDetail(null)}
         />
       )}
     </div>
@@ -2395,6 +2405,122 @@ function LogTable({
   );
 }
 
+function AuditLogTable({
+  logs,
+  onOpenLog,
+}: {
+  logs: AuditLog[];
+  onOpenLog: (log: AuditLog) => void;
+}) {
+  return (
+    <section>
+      <div style={styles.sectionHeader}>
+        <h2 className="cstc-section-title">Audit Log</h2>
+        <p style={styles.sectionCopy}>
+          Recent dashboard activity. Hover for a preview, click for full details.
+        </p>
+      </div>
+
+      <div className="cstc-card" style={styles.auditList}>
+        {logs.length === 0 && <div style={styles.emptyState}>No records.</div>}
+
+        {logs.map((log) => {
+          const preview = JSON.stringify(log.details || {}, null, 2);
+
+          return (
+            <button
+              key={log.id}
+              style={styles.auditRow}
+              onClick={() => onOpenLog(log)}
+              title={preview}
+            >
+              <div>
+                <strong style={styles.compactName}>
+                  {formatAuditAction(log.action)}
+                </strong>
+                <div style={styles.compactMeta}>
+                  {log.entity_type || "system"}
+                  {log.entity_id ? ` · ${shortenId(log.entity_id)}` : ""}
+                </div>
+              </div>
+
+              <div style={styles.auditActor}>{log.actor || "dashboard"}</div>
+
+              <div style={styles.auditTime}>
+                {log.created_at ? new Date(log.created_at).toLocaleString() : ""}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function AuditDetailModal({
+  log,
+  onClose,
+}: {
+  log: AuditLog;
+  onClose: () => void;
+}) {
+  return (
+    <div style={styles.modalBackdrop}>
+      <div className="cstc-card" style={styles.auditModalCard}>
+        <span className="cstc-overline">Audit Detail</span>
+
+        <h2 className="cstc-section-title">{formatAuditAction(log.action)}</h2>
+
+        <div style={styles.auditDetailGrid}>
+          <div>
+            <strong>Actor</strong>
+            <span>{log.actor || "dashboard"}</span>
+          </div>
+
+          <div>
+            <strong>Entity</strong>
+            <span>{log.entity_type || "system"}</span>
+          </div>
+
+          <div>
+            <strong>Entity ID</strong>
+            <span>{log.entity_id || "—"}</span>
+          </div>
+
+          <div>
+            <strong>Date</strong>
+            <span>
+              {log.created_at ? new Date(log.created_at).toLocaleString() : "—"}
+            </span>
+          </div>
+        </div>
+
+        <label style={styles.fieldLabel}>Details</label>
+        <pre style={styles.auditDetailPre}>
+          {JSON.stringify(log.details || {}, null, 2)}
+        </pre>
+
+        <div style={styles.modalActions}>
+          <button className="cstc-btn-primary" onClick={onClose}>
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function formatAuditAction(action: string) {
+  return action
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function shortenId(value: string) {
+  if (value.length <= 12) return value;
+  return `${value.slice(0, 8)}…${value.slice(-4)}`;
+}
+
 function ConfirmModal({
   modal,
   inputValue,
@@ -2594,6 +2720,13 @@ const styles: Record<string, CSSProperties> = {
   tileButton: {
     cursor: "pointer",
     textAlign: "left",
+  },
+
+  tileHint: {
+    color: "var(--cstc-muted)",
+    fontSize: 13,
+    lineHeight: "20px",
+    margin: "10px 0 0",
   },
 
   statNumber: {
@@ -2937,6 +3070,64 @@ const styles: Record<string, CSSProperties> = {
     fontSize: 12,
     lineHeight: "18px",
     overflowWrap: "anywhere",
+  },
+
+  auditList: {
+    overflow: "hidden",
+  },
+
+  auditRow: {
+    alignItems: "center",
+    background: "#fff",
+    border: "none",
+    borderBottom: "1px solid var(--cstc-border)",
+    cursor: "pointer",
+    display: "grid",
+    gap: 16,
+    gridTemplateColumns: "1fr 180px 240px",
+    padding: "14px 16px",
+    textAlign: "left",
+    width: "100%",
+  },
+
+  auditActor: {
+    color: "var(--cstc-cobalt)",
+    fontFamily: "Poppins, Arial, sans-serif",
+    fontSize: 12,
+    fontWeight: 700,
+    textTransform: "uppercase",
+  },
+
+  auditTime: {
+    color: "var(--cstc-muted)",
+    fontSize: 13,
+    textAlign: "right",
+  },
+
+  auditModalCard: {
+    maxWidth: 760,
+    padding: 28,
+    width: "100%",
+  },
+
+  auditDetailGrid: {
+    display: "grid",
+    gap: 12,
+    gridTemplateColumns: "1fr 1fr",
+    marginTop: 18,
+  },
+
+  auditDetailPre: {
+    background: "var(--cstc-light-bg)",
+    border: "1px solid var(--cstc-border)",
+    borderRadius: 5,
+    color: "var(--cstc-copy)",
+    fontSize: 13,
+    lineHeight: "20px",
+    maxHeight: 320,
+    overflow: "auto",
+    padding: 14,
+    whiteSpace: "pre-wrap",
   },
 
   modalBackdrop: {
