@@ -192,6 +192,9 @@ export default function App() {
   const [contactForm, setContactForm] = useState<ContactDraft>(emptyContact);
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
 
+  const [selectedContactIds, setSelectedContactIds] = useState<string[]>([]);
+  const [bulkGroupId, setBulkGroupId] = useState("");
+
   const [contactSearch, setContactSearch] = useState("");
   const [contactGroupFilter, setContactGroupFilter] = useState<string>("all");
   const [contactSort, setContactSort] = useState<ContactSort>("last_name");
@@ -287,6 +290,19 @@ export default function App() {
     tagMembers,
     tags,
   ]);
+
+  const visibleContactIds = useMemo(
+    () => filteredContacts.map((contact) => contact.id),
+    [filteredContacts]
+  );
+
+  const selectedVisibleContactCount = selectedContactIds.filter((id) =>
+    visibleContactIds.includes(id)
+  ).length;
+
+  const allVisibleContactsSelected =
+    visibleContactIds.length > 0 &&
+    selectedVisibleContactCount === visibleContactIds.length;
 
   async function loadAll() {
     const [
@@ -438,6 +454,202 @@ export default function App() {
 
       return true;
     }).length;
+  }
+
+  function isContactSelected(contactId: string) {
+    return selectedContactIds.includes(contactId);
+  }
+
+  function toggleContactSelection(contactId: string) {
+    setSelectedContactIds((current) =>
+      current.includes(contactId)
+        ? current.filter((id) => id !== contactId)
+        : [...current, contactId]
+    );
+  }
+
+  function toggleAllVisibleContacts() {
+    if (allVisibleContactsSelected) {
+      setSelectedContactIds((current) =>
+        current.filter((id) => !visibleContactIds.includes(id))
+      );
+      return;
+    }
+
+    setSelectedContactIds((current) =>
+      Array.from(new Set([...current, ...visibleContactIds]))
+    );
+  }
+
+  function clearSelectedContacts() {
+    setSelectedContactIds([]);
+  }
+
+  async function bulkSetSmsStatus(active: boolean) {
+    if (selectedContactIds.length === 0) {
+      showNotice("Select at least one contact first.");
+      return;
+    }
+
+    const ok = await requestConfirmation({
+      title: active ? "Bulk Opt-In?" : "Bulk Opt-Out?",
+      message: active
+        ? `Mark ${selectedContactIds.length} selected contact(s) as SMS opted in?`
+        : `Mark ${selectedContactIds.length} selected contact(s) as SMS opted out?`,
+      confirmText: active ? "Opt In Selected" : "Opt Out Selected",
+      cancelText: "Cancel",
+      danger: !active,
+    });
+
+    if (!ok) return;
+
+    setLoading(true);
+
+    const { error } = await supabase
+      .from("contacts")
+      .update({
+        sms_opt_in: active,
+        sms_opt_out: !active,
+        sms_opt_in_date: active ? new Date().toISOString() : null,
+        sms_opt_out_date: !active ? new Date().toISOString() : null,
+      })
+      .in("id", selectedContactIds);
+
+    setLoading(false);
+
+    if (error) {
+      showNotice(`Bulk SMS update failed: ${error.message}`);
+      return;
+    }
+
+    await logAudit("bulk_changed_contact_sms_status", "contacts", undefined, {
+      contact_ids: selectedContactIds,
+      active,
+    });
+
+    showNotice(
+      active
+        ? `${selectedContactIds.length} contact(s) opted in.`
+        : `${selectedContactIds.length} contact(s) opted out.`
+    );
+
+    clearSelectedContacts();
+    await loadAll();
+  }
+
+  async function bulkAddToAudienceGroup() {
+    if (selectedContactIds.length === 0) {
+      showNotice("Select at least one contact first.");
+      return;
+    }
+
+    if (!bulkGroupId) {
+      showNotice("Choose an audience group first.");
+      return;
+    }
+
+    const selectedTag = tags.find((tag) => tag.id === bulkGroupId);
+    const ok = await requestConfirmation({
+      title: "Add to Audience Group?",
+      message: `Add ${selectedContactIds.length} selected contact(s) to ${
+        selectedTag?.tag_name || "this audience group"
+      }?`,
+      confirmText: "Add to Group",
+      cancelText: "Cancel",
+    });
+
+    if (!ok) return;
+
+    setLoading(true);
+
+    const rows = selectedContactIds.map((contactId) => ({
+      contact_id: contactId,
+      tag_id: bulkGroupId,
+    }));
+
+    const { error } = await supabase
+      .from("contact_tag_members")
+      .upsert(rows, { onConflict: "contact_id,tag_id" });
+
+    setLoading(false);
+
+    if (error) {
+      showNotice(`Bulk group add failed: ${error.message}`);
+      return;
+    }
+
+    await logAudit("bulk_added_contacts_to_audience_group", "contact_tags", bulkGroupId, {
+      contact_ids: selectedContactIds,
+      tag_name: selectedTag?.tag_name,
+    });
+
+    showNotice(
+      `${selectedContactIds.length} contact(s) added to ${
+        selectedTag?.tag_name || "audience group"
+      }.`
+    );
+
+    clearSelectedContacts();
+    await loadAll();
+  }
+
+  async function bulkRemoveFromAudienceGroup() {
+    if (selectedContactIds.length === 0) {
+      showNotice("Select at least one contact first.");
+      return;
+    }
+
+    if (!bulkGroupId) {
+      showNotice("Choose an audience group first.");
+      return;
+    }
+
+    const selectedTag = tags.find((tag) => tag.id === bulkGroupId);
+    const ok = await requestConfirmation({
+      title: "Remove from Audience Group?",
+      message: `Remove ${selectedContactIds.length} selected contact(s) from ${
+        selectedTag?.tag_name || "this audience group"
+      }?`,
+      confirmText: "Remove from Group",
+      cancelText: "Cancel",
+      danger: true,
+    });
+
+    if (!ok) return;
+
+    setLoading(true);
+
+    const { error } = await supabase
+      .from("contact_tag_members")
+      .delete()
+      .eq("tag_id", bulkGroupId)
+      .in("contact_id", selectedContactIds);
+
+    setLoading(false);
+
+    if (error) {
+      showNotice(`Bulk group remove failed: ${error.message}`);
+      return;
+    }
+
+    await logAudit(
+      "bulk_removed_contacts_from_audience_group",
+      "contact_tags",
+      bulkGroupId,
+      {
+        contact_ids: selectedContactIds,
+        tag_name: selectedTag?.tag_name,
+      }
+    );
+
+    showNotice(
+      `${selectedContactIds.length} contact(s) removed from ${
+        selectedTag?.tag_name || "audience group"
+      }.`
+    );
+
+    clearSelectedContacts();
+    await loadAll();
   }
 
   function openCampaigns(filter: CampaignFilter = "all") {
@@ -1496,7 +1708,8 @@ export default function App() {
               <div style={styles.sectionHeader}>
                 <h2 className="cstc-section-title">Contact List</h2>
                 <p style={styles.sectionCopy}>
-                  Manage contacts, audience groups, SMS consent, and compliance fields.
+                  Manage contacts, audience groups, SMS consent, and compliance
+                  fields.
                 </p>
               </div>
 
@@ -1536,6 +1749,67 @@ export default function App() {
                 </select>
               </div>
 
+              {selectedContactIds.length > 0 && (
+                <div className="cstc-card" style={styles.bulkActionBar}>
+                  <div>
+                    <strong style={styles.bulkCount}>
+                      {selectedContactIds.length} selected
+                    </strong>
+                    <div style={styles.compactMeta}>
+                      Bulk actions affect selected contacts only.
+                    </div>
+                  </div>
+
+                  <button
+                    className="cstc-btn-small"
+                    onClick={() => bulkSetSmsStatus(true)}
+                  >
+                    Opt In
+                  </button>
+
+                  <button
+                    className="cstc-btn-small"
+                    onClick={() => bulkSetSmsStatus(false)}
+                  >
+                    Opt Out
+                  </button>
+
+                  <select
+                    className="cstc-select-compact"
+                    value={bulkGroupId}
+                    onChange={(event) => setBulkGroupId(event.target.value)}
+                  >
+                    <option value="">Choose Group</option>
+                    {tags.map((tag) => (
+                      <option key={tag.id} value={tag.id}>
+                        {tag.tag_name}
+                      </option>
+                    ))}
+                  </select>
+
+                  <button
+                    className="cstc-btn-small"
+                    onClick={bulkAddToAudienceGroup}
+                  >
+                    Add Group
+                  </button>
+
+                  <button
+                    className="cstc-btn-small"
+                    onClick={bulkRemoveFromAudienceGroup}
+                  >
+                    Remove Group
+                  </button>
+
+                  <button
+                    className="cstc-btn-secondary"
+                    onClick={clearSelectedContacts}
+                  >
+                    Clear
+                  </button>
+                </div>
+              )}
+
               {importPreview && (
                 <ImportPreview
                   rows={importPreview}
@@ -1549,48 +1823,87 @@ export default function App() {
                   <div style={styles.emptyState}>No contacts found.</div>
                 )}
 
-                {filteredContacts.map((contact) => (
-                  <div
-                    key={contact.id}
-                    style={{
-                      ...styles.compactContactRow,
-                      background:
-                        editingContactId === contact.id
-                          ? "var(--cstc-light-bg)"
-                          : "#fff",
-                    }}
-                  >
-                    <label style={styles.compactCheckboxWrap}>
+                {filteredContacts.length > 0 && (
+                  <div style={styles.contactListHeader}>
+                    <label style={styles.selectAllWrap}>
                       <input
                         className="cstc-checkbox"
                         type="checkbox"
-                        checked={contact.sms_opt_in && !contact.sms_opt_out}
-                        onChange={() => toggleContactSmsActive(contact)}
+                        checked={allVisibleContactsSelected}
+                        onChange={toggleAllVisibleContacts}
                       />
+                      Select visible
                     </label>
 
-                    <button
-                      style={styles.compactContactButton}
-                      onClick={() => startEditContact(contact)}
-                    >
-                      <span style={styles.compactName}>
-                        {fullName(contact)}
-                      </span>
-                      <span style={styles.compactMeta}>
-                        {contact.phone_e164 || contact.phone_raw || "No phone"}
-                        {contact.email ? ` · ${contact.email}` : ""}
-                      </span>
-                    </button>
-
-                    <div style={styles.tagGroup}>
-                      {tagsForContact(contact.id).slice(0, 3).map((tag) => (
-                        <span key={tag.id} style={styles.smallTag}>
-                          {tag.tag_name}
-                        </span>
-                      ))}
-                    </div>
+                    <span style={styles.contactHeaderLabel}>Contact</span>
+                    <span style={styles.contactHeaderLabel}>Groups</span>
+                    <span style={styles.contactHeaderLabel}>SMS</span>
                   </div>
-                ))}
+                )}
+
+                {filteredContacts.map((contact) => {
+                  const smsActive = contact.sms_opt_in && !contact.sms_opt_out;
+
+                  return (
+                    <div
+                      key={contact.id}
+                      style={{
+                        ...styles.compactContactRow,
+                        background:
+                          editingContactId === contact.id
+                            ? "var(--cstc-light-bg)"
+                            : "#fff",
+                      }}
+                    >
+                      <label style={styles.compactCheckboxWrap}>
+                        <input
+                          className="cstc-checkbox"
+                          type="checkbox"
+                          checked={isContactSelected(contact.id)}
+                          onChange={() => toggleContactSelection(contact.id)}
+                          aria-label={`Select ${fullName(contact)}`}
+                        />
+                      </label>
+
+                      <button
+                        style={styles.compactContactButton}
+                        onClick={() => startEditContact(contact)}
+                      >
+                        <span style={styles.compactName}>
+                          {fullName(contact)}
+                        </span>
+                        <span style={styles.compactMeta}>
+                          {contact.phone_e164 || contact.phone_raw || "No phone"}
+                          {contact.email ? ` · ${contact.email}` : ""}
+                        </span>
+                      </button>
+
+                      <div style={styles.tagGroup}>
+                        {tagsForContact(contact.id).slice(0, 3).map((tag) => (
+                          <span key={tag.id} style={styles.smallTag}>
+                            {tag.tag_name}
+                          </span>
+                        ))}
+                      </div>
+
+                      <button
+                        style={{
+                          ...styles.smsToggle,
+                          background: smsActive
+                            ? "var(--cstc-success)"
+                            : "var(--cstc-light-bg)",
+                          borderColor: smsActive
+                            ? "var(--cstc-success)"
+                            : "var(--cstc-border)",
+                          color: smsActive ? "#fff" : "var(--cstc-cobalt)",
+                        }}
+                        onClick={() => toggleContactSmsActive(contact)}
+                      >
+                        {smsActive ? "SMS On" : "SMS Off"}
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
             </div>
 
@@ -1623,7 +1936,8 @@ export default function App() {
             <div style={styles.sectionHeader}>
               <h2 className="cstc-section-title">Audience Groups</h2>
               <p style={styles.sectionCopy}>
-                Manage reusable lists of people, such as donors, staff, teachers, VIPs, press, and opening night guests.
+                Manage reusable lists of people, such as donors, staff,
+                teachers, VIPs, press, and opening night guests.
               </p>
             </div>
 
@@ -2309,7 +2623,7 @@ const styles: Record<string, CSSProperties> = {
     alignItems: "start",
     display: "grid",
     gap: 28,
-    gridTemplateColumns: "minmax(520px, 1.2fr) minmax(420px, 0.8fr)",
+    gridTemplateColumns: "minmax(620px, 1.25fr) minmax(420px, 0.75fr)",
   },
 
   sectionHeader: {
@@ -2414,8 +2728,49 @@ const styles: Record<string, CSSProperties> = {
     marginBottom: 18,
   },
 
+  bulkActionBar: {
+    alignItems: "center",
+    display: "grid",
+    gap: 10,
+    gridTemplateColumns: "1fr auto auto 170px auto auto auto",
+    marginBottom: 18,
+    padding: 14,
+  },
+
+  bulkCount: {
+    color: "var(--cstc-cobalt)",
+    fontFamily: "Poppins, Arial, sans-serif",
+    fontSize: 14,
+    textTransform: "uppercase",
+  },
+
   compactContactList: {
     overflow: "hidden",
+  },
+
+  contactListHeader: {
+    alignItems: "center",
+    background: "var(--cstc-light-bg)",
+    borderBottom: "1px solid var(--cstc-border)",
+    color: "var(--cstc-cobalt)",
+    display: "grid",
+    fontFamily: "Poppins, Arial, sans-serif",
+    fontSize: 12,
+    fontWeight: 700,
+    gap: 10,
+    gridTemplateColumns: "120px 1fr minmax(180px, auto) 90px",
+    padding: "10px 12px",
+    textTransform: "uppercase",
+  },
+
+  selectAllWrap: {
+    alignItems: "center",
+    display: "flex",
+    gap: 8,
+  },
+
+  contactHeaderLabel: {
+    display: "block",
   },
 
   compactContactRow: {
@@ -2423,8 +2778,8 @@ const styles: Record<string, CSSProperties> = {
     borderBottom: "1px solid var(--cstc-border)",
     display: "grid",
     gap: 10,
-    gridTemplateColumns: "28px 1fr auto",
-    minHeight: 54,
+    gridTemplateColumns: "28px 1fr minmax(180px, auto) 90px",
+    minHeight: 58,
     padding: "8px 12px",
   },
 
@@ -2473,6 +2828,18 @@ const styles: Record<string, CSSProperties> = {
     fontWeight: 700,
     padding: "4px 7px",
     textTransform: "uppercase",
+  },
+
+  smsToggle: {
+    border: "1px solid var(--cstc-border)",
+    borderRadius: 999,
+    cursor: "pointer",
+    fontFamily: "Poppins, Arial, sans-serif",
+    fontSize: 11,
+    fontWeight: 700,
+    padding: "7px 10px",
+    textTransform: "uppercase",
+    whiteSpace: "nowrap",
   },
 
   checkboxLabelLarge: {
