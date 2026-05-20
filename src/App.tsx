@@ -167,6 +167,49 @@ const campaignFilters: CampaignFilter[] = [
   "archived",
 ];
 
+async function fetchAllRows<T>(
+  tableName: string,
+  orderColumn?: string,
+  ascending = true,
+  pageSize = 1000
+): Promise<{ data: T[]; error: Error | null }> {
+  const allRows: T[] = [];
+  let from = 0;
+
+  while (true) {
+    let query = supabase
+      .from(tableName)
+      .select("*")
+      .range(from, from + pageSize - 1);
+
+    if (orderColumn) {
+      query = query.order(orderColumn, { ascending });
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      return {
+        data: allRows,
+        error: new Error(error.message),
+      };
+    }
+
+    allRows.push(...((data || []) as T[]));
+
+    if (!data || data.length < pageSize) {
+      break;
+    }
+
+    from += pageSize;
+  }
+
+  return {
+    data: allRows,
+    error: null,
+  };
+}
+
 export default function App() {
   const [view, setView] = useState<View>("dashboard");
   const [campaignFilter, setCampaignFilter] =
@@ -331,42 +374,26 @@ export default function App() {
       inboundResult,
       auditResult,
     ] = await Promise.all([
-      supabase
-        .from("sms_campaigns")
-        .select("*")
-        .order("created_at", { ascending: false }),
-      supabase.from("contacts").select("*").order("last_name", {
-        ascending: true,
-      }),
-      supabase.from("contact_tags").select("*").order("tag_name"),
-      supabase.from("contact_tag_members").select("*"),
-      supabase
-        .from("sms_outbound")
-        .select("*")
-        .order("created_at", { ascending: false })
-        .limit(250),
-      supabase
-        .from("sms_inbound")
-        .select("*")
-        .order("created_at", { ascending: false })
-        .limit(250),
-      supabase
-        .from("audit_log")
-        .select("*")
-        .order("created_at", { ascending: false })
-        .limit(250),
+      fetchAllRows<Campaign>("sms_campaigns", "created_at", false),
+      fetchAllRows<Contact>("contacts", "last_name", true),
+      fetchAllRows<ContactTag>("contact_tags", "tag_name", true),
+      fetchAllRows<ContactTagMember>("contact_tag_members"),
+      fetchAllRows<OutboundLog>("sms_outbound", "created_at", false),
+      fetchAllRows<InboundReply>("sms_inbound", "created_at", false),
+      fetchAllRows<AuditLog>("audit_log", "created_at", false),
     ]);
 
-    if (campaignResult.data) setCampaigns(campaignResult.data as Campaign[]);
-    if (contactResult.data) setContacts(contactResult.data as Contact[]);
-    if (tagResult.data) setTags(tagResult.data as ContactTag[]);
-    if (memberResult.data)
-      setTagMembers(memberResult.data as ContactTagMember[]);
-    if (outboundResult.data)
-      setOutboundLogs(outboundResult.data as OutboundLog[]);
-    if (inboundResult.data)
-      setInboundReplies(inboundResult.data as InboundReply[]);
-    if (auditResult.data) setAuditLogs(auditResult.data as AuditLog[]);
+    setCampaigns(campaignResult.data);
+    setContacts(contactResult.data);
+    setTags(tagResult.data);
+    setTagMembers(memberResult.data);
+
+    // Keep heavy log views capped in the UI, but load enough rows first so
+    // contact lookups, campaign names, and dashboard totals are not stuck at
+    // Supabase's default 1,000-row response cap.
+    setOutboundLogs(outboundResult.data.slice(0, 250));
+    setInboundReplies(inboundResult.data.slice(0, 250));
+    setAuditLogs(auditResult.data.slice(0, 250));
 
     const firstError =
       campaignResult.error ||
@@ -377,7 +404,9 @@ export default function App() {
       inboundResult.error ||
       auditResult.error;
 
-    if (firstError) setNotice(`Load error: ${firstError.message}`);
+    if (firstError) {
+      setNotice(`Load error: ${firstError.message}`);
+    }
   }
 
   async function logAudit(
@@ -1012,19 +1041,15 @@ export default function App() {
   async function checkDuplicateContact(phone: string, email: string) {
     const normalizedEmail = email.trim().toLowerCase();
 
-    let query = supabase.from("contacts").select("*");
+    const duplicate = contacts.find((contact) => {
+      if (editingContactId && contact.id === editingContactId) {
+        return false;
+      }
 
-    if (editingContactId) {
-      query = query.neq("id", editingContactId);
-    }
-
-    const { data } = await query;
-
-    const duplicate = (data || []).find((contact) => {
-      const phoneMatches = phone && contact.phone_e164 === phone;
+      const phoneMatches = Boolean(phone) && contact.phone_e164 === phone;
       const emailMatches =
-        normalizedEmail &&
-        contact.email &&
+        Boolean(normalizedEmail) &&
+        Boolean(contact.email) &&
         String(contact.email).toLowerCase() === normalizedEmail;
 
       return phoneMatches || emailMatches;
