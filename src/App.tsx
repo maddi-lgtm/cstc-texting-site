@@ -769,9 +769,29 @@ export default function App() {
     setLoading(false);
 
     if (error) {
-      showNotice(`Send failed: ${error.message}`);
-      return;
+  let detailedMessage = error.message;
+
+  const maybeErrorWithContext = error as typeof error & {
+    context?: Response;
+  };
+
+  if (maybeErrorWithContext.context instanceof Response) {
+    try {
+      const errorBody = await maybeErrorWithContext.context.clone().json();
+
+      detailedMessage =
+        errorBody.details ||
+        errorBody.error ||
+        JSON.stringify(errorBody);
+    } catch {
+      detailedMessage = await maybeErrorWithContext.context.clone().text();
     }
+  }
+
+  console.error("send-campaign failed:", error);
+  showNotice(`Send failed: ${detailedMessage}`);
+  return;
+}
 
     const sentCount =
       data && typeof data.sent_count === "number" ? data.sent_count : "Unknown";
