@@ -3326,7 +3326,7 @@ const styles: Record<string, CSSProperties> = {
     justifyContent: "center",
     padding: 24,
     position: "fixed",
-    zIndex: 1000,
+    zIndex: 100000,
   },
 
   modalCard: {
