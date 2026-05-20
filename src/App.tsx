@@ -743,132 +743,96 @@ export default function App() {
   }
 
   async function executeSendCampaign() {
-  if (!sendModal) return;
+    if (!sendModal) return;
 
-  if (!sendAllContacts && sendSelectedTagIds.length === 0) {
-    showNotice("Choose at least one audience group.");
-    return;
-  }
-
-  if (sendConfirmText !== "SEND") {
-    showNotice("Type SEND to confirm.");
-    return;
-  }
-
-  setLoading(true);
-
-  const batchSize = 75;
-  let batchOffset = 0;
-  let totalSent = 0;
-  let totalSuccess = 0;
-  let totalFailure = 0;
-  let totalEligible = 0;
-  let hasMore = true;
-
-  while (hasMore) {
-    const { data, error } = await supabase.functions.invoke("send-campaign", {
-      body: {
-        campaign_id: sendModal.campaign.id,
-        audience: sendAllContacts ? "all" : "tags",
-        tag_ids: sendSelectedTagIds,
-        send_type: sendModal.sendType,
-        batch_size: batchSize,
-        batch_offset: batchOffset,
-      },
-    });
-
-    if (error) {
-      let detailedMessage = error.message;
-
-      const maybeErrorWithContext = error as typeof error & {
-        context?: Response;
-      };
-
-      if (maybeErrorWithContext.context instanceof Response) {
-        try {
-          const errorBody = await maybeErrorWithContext.context.clone().json();
-
-          detailedMessage =
-            errorBody.details ||
-            errorBody.error ||
-            JSON.stringify(errorBody);
-        } catch {
-          detailedMessage = await maybeErrorWithContext.context.clone().text();
-        }
-      }
-
-      console.error("send-campaign failed:", error);
-      showNotice(
-        `Send stopped after ${totalSent} message(s). Error: ${detailedMessage}`
-      );
-      setLoading(false);
+    if (!sendAllContacts && sendSelectedTagIds.length === 0) {
+      showNotice("Choose at least one audience group.");
       return;
     }
 
-    totalEligible =
-      typeof data?.total_eligible === "number"
-        ? data.total_eligible
-        : totalEligible;
+    if (sendConfirmText !== "SEND") {
+      showNotice("Type SEND to confirm.");
+      return;
+    }
 
-    totalSent += typeof data?.sent_count === "number" ? data.sent_count : 0;
-    totalSuccess +=
-      typeof data?.success_count === "number" ? data.success_count : 0;
-    totalFailure +=
-      typeof data?.failure_count === "number" ? data.failure_count : 0;
+    setLoading(true);
 
-    hasMore = Boolean(data?.has_more);
-    batchOffset =
-      typeof data?.next_offset === "number"
-        ? data.next_offset
-        : batchOffset + batchSize;
+    const batchSize = 75;
+    let batchOffset = 0;
+    let totalSent = 0;
+    let totalSuccess = 0;
+    let totalFailure = 0;
+    let totalEligible = 0;
+    let hasMore = true;
 
-    showNotice(
-      `Sending… ${Math.min(totalSent, totalEligible)} of ${totalEligible}`
-    );
-  }
+    while (hasMore) {
+      const { data, error } = await supabase.functions.invoke("send-campaign", {
+        body: {
+          campaign_id: sendModal.campaign.id,
+          audience: sendAllContacts ? "all" : "tags",
+          tag_ids: sendSelectedTagIds,
+          send_type: sendModal.sendType,
+          batch_size: batchSize,
+          batch_offset: batchOffset,
+        },
+      });
 
-  setLoading(false);
+      if (error) {
+        let detailedMessage = error.message;
 
-  showNotice(
-    `Send complete. Attempted ${totalSent}. Success: ${totalSuccess}. Failed: ${totalFailure}.`
-  );
+        const maybeErrorWithContext = error as typeof error & {
+          context?: Response;
+        };
 
-  closeSendModal();
-  await loadAll();
-},
-    });
+        if (maybeErrorWithContext.context instanceof Response) {
+          try {
+            const errorBody = await maybeErrorWithContext.context.clone().json();
+
+            detailedMessage =
+              errorBody.details ||
+              errorBody.error ||
+              JSON.stringify(errorBody);
+          } catch {
+            detailedMessage = await maybeErrorWithContext.context.clone().text();
+          }
+        }
+
+        console.error("send-campaign failed:", error);
+        showNotice(
+          `Send stopped after ${totalSent} message(s). Error: ${detailedMessage}`
+        );
+        setLoading(false);
+        return;
+      }
+
+      totalEligible =
+        typeof data?.total_eligible === "number"
+          ? data.total_eligible
+          : totalEligible;
+
+      totalSent += typeof data?.sent_count === "number" ? data.sent_count : 0;
+      totalSuccess +=
+        typeof data?.success_count === "number" ? data.success_count : 0;
+      totalFailure +=
+        typeof data?.failure_count === "number" ? data.failure_count : 0;
+
+      hasMore = Boolean(data?.has_more);
+      batchOffset =
+        typeof data?.next_offset === "number"
+          ? data.next_offset
+          : batchOffset + batchSize;
+
+      showNotice(
+        `Sending… ${Math.min(totalSent, totalEligible)} of ${totalEligible}`
+      );
+    }
 
     setLoading(false);
 
-    if (error) {
-  let detailedMessage = error.message;
+    showNotice(
+      `Send complete. Attempted ${totalSent}. Success: ${totalSuccess}. Failed: ${totalFailure}.`
+    );
 
-  const maybeErrorWithContext = error as typeof error & {
-    context?: Response;
-  };
-
-  if (maybeErrorWithContext.context instanceof Response) {
-    try {
-      const errorBody = await maybeErrorWithContext.context.clone().json();
-
-      detailedMessage =
-        errorBody.details ||
-        errorBody.error ||
-        JSON.stringify(errorBody);
-    } catch {
-      detailedMessage = await maybeErrorWithContext.context.clone().text();
-    }
-  }
-
-  console.error("send-campaign failed:", error);
-  showNotice(`Send failed: ${detailedMessage}`);
-  return;
-}
-
-    const sentCount =
-      data && typeof data.sent_count === "number" ? data.sent_count : "Unknown";
-
-    showNotice(`Send complete. Sent count: ${sentCount}`);
     closeSendModal();
     await loadAll();
   }
