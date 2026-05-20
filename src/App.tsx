@@ -757,7 +757,7 @@ export default function App() {
 
     setLoading(true);
 
-    const batchSize = 75;
+    const batchSize = 20;
     let batchOffset = 0;
     let totalSent = 0;
     let totalSuccess = 0;
