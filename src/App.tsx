@@ -743,99 +743,126 @@ export default function App() {
   }
 
   async function executeSendCampaign() {
-    if (!sendModal) return;
+  if (!sendModal) return;
 
-    if (!sendAllContacts && sendSelectedTagIds.length === 0) {
-      showNotice("Choose at least one audience group.");
-      return;
-    }
+  if (!sendAllContacts && sendSelectedTagIds.length === 0) {
+    showNotice("Choose at least one audience group.");
+    return;
+  }
 
-    if (sendConfirmText !== "SEND") {
-      showNotice("Type SEND to confirm.");
-      return;
-    }
+  if (sendConfirmText !== "SEND") {
+    showNotice("Type SEND to confirm.");
+    return;
+  }
 
-    setLoading(true);
+  setLoading(true);
 
-    const batchSize = 20;
-    let batchOffset = 0;
-    let totalSent = 0;
-    let totalSuccess = 0;
-    let totalFailure = 0;
-    let totalEligible = 0;
-    let hasMore = true;
+  const batchSize = 20;
+  let batchOffset = 0;
+  let totalSent = 0;
+  let totalSuccess = 0;
+  let totalFailure = 0;
+  let totalEligible = 0;
+  let hasMore = true;
+  let batchNumber = 1;
 
-    while (hasMore) {
-      const { data, error } = await supabase.functions.invoke("send-campaign", {
-        body: {
-          campaign_id: sendModal.campaign.id,
-          audience: sendAllContacts ? "all" : "tags",
-          tag_ids: sendSelectedTagIds,
-          send_type: sendModal.sendType,
-          batch_size: batchSize,
-          batch_offset: batchOffset,
-        },
-      });
+  while (hasMore) {
+    console.log("Sending campaign batch", {
+      batchNumber,
+      batchSize,
+      batchOffset,
+    });
 
-      if (error) {
-        let detailedMessage = error.message;
+    const { data, error } = await supabase.functions.invoke("send-campaign", {
+      body: {
+        campaign_id: sendModal.campaign.id,
+        audience: sendAllContacts ? "all" : "tags",
+        tag_ids: sendSelectedTagIds,
+        send_type: sendModal.sendType,
+        batch_size: batchSize,
+        batch_offset: batchOffset,
+      },
+    });
 
-        const maybeErrorWithContext = error as typeof error & {
-          context?: Response;
-        };
+    if (error) {
+      let detailedMessage = error.message;
 
-        if (maybeErrorWithContext.context instanceof Response) {
-          try {
-            const errorBody = await maybeErrorWithContext.context.clone().json();
+      const maybeErrorWithContext = error as typeof error & {
+        context?: Response;
+      };
 
-            detailedMessage =
-              errorBody.details ||
-              errorBody.error ||
-              JSON.stringify(errorBody);
-          } catch {
-            detailedMessage = await maybeErrorWithContext.context.clone().text();
-          }
+      if (maybeErrorWithContext.context instanceof Response) {
+        try {
+          const errorBody = await maybeErrorWithContext.context.clone().json();
+
+          console.error("send-campaign response body:", errorBody);
+
+          detailedMessage =
+            errorBody.details ||
+            errorBody.error ||
+            JSON.stringify(errorBody);
+        } catch {
+          const errorText = await maybeErrorWithContext.context.clone().text();
+          console.error("send-campaign response text:", errorText);
+          detailedMessage = errorText;
         }
-
-        console.error("send-campaign failed:", error);
-        showNotice(
-          `Send stopped after ${totalSent} message(s). Error: ${detailedMessage}`
-        );
-        setLoading(false);
-        return;
       }
 
-      totalEligible =
-        typeof data?.total_eligible === "number"
-          ? data.total_eligible
-          : totalEligible;
-
-      totalSent += typeof data?.sent_count === "number" ? data.sent_count : 0;
-      totalSuccess +=
-        typeof data?.success_count === "number" ? data.success_count : 0;
-      totalFailure +=
-        typeof data?.failure_count === "number" ? data.failure_count : 0;
-
-      hasMore = Boolean(data?.has_more);
-      batchOffset =
-        typeof data?.next_offset === "number"
-          ? data.next_offset
-          : batchOffset + batchSize;
+      console.error("send-campaign failed:", error);
 
       showNotice(
-        `Sending… ${Math.min(totalSent, totalEligible)} of ${totalEligible}`
+        `Send stopped after ${totalSent} message(s). Error: ${detailedMessage}`
       );
+
+      setLoading(false);
+      return;
     }
 
-    setLoading(false);
+    console.log("send-campaign batch response:", data);
+
+    const sentThisBatch =
+      typeof data?.sent_count === "number" ? data.sent_count : 0;
+
+    const nextOffset =
+      typeof data?.next_offset === "number"
+        ? data.next_offset
+        : batchOffset + sentThisBatch;
+
+    totalEligible =
+      typeof data?.total_eligible === "number"
+        ? data.total_eligible
+        : totalEligible;
+
+    totalSent += sentThisBatch;
+    totalSuccess +=
+      typeof data?.success_count === "number" ? data.success_count : 0;
+    totalFailure +=
+      typeof data?.failure_count === "number" ? data.failure_count : 0;
+
+    hasMore =
+      Boolean(data?.has_more) ||
+      (totalEligible > 0 && nextOffset < totalEligible && sentThisBatch > 0);
+
+    batchOffset = nextOffset;
+    batchNumber += 1;
 
     showNotice(
-      `Send complete. Attempted ${totalSent}. Success: ${totalSuccess}. Failed: ${totalFailure}.`
+      `Sending… ${Math.min(totalSent, totalEligible)} of ${totalEligible}`
     );
 
-    closeSendModal();
-    await loadAll();
+    // Tiny pause so the browser/UI can breathe between batches.
+    await new Promise((resolve) => window.setTimeout(resolve, 250));
   }
+
+  setLoading(false);
+
+  showNotice(
+    `Send complete. Attempted ${totalSent}. Success: ${totalSuccess}. Failed: ${totalFailure}.`
+  );
+
+  closeSendModal();
+  await loadAll();
+}
 
   function isCampaignDirty() {
     if (campaignMode === "none") return false;
